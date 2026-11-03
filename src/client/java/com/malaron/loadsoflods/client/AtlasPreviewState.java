@@ -66,6 +66,7 @@ public final class AtlasPreviewState {
 	private static volatile boolean lowPreviewEnabled;
 	private static volatile boolean distancePreviewEnabled;
 	private static volatile TextureAtlas previewedAtlas;
+	private static volatile List<Object> reducedPbrAtlases = List.of();
 	private static volatile GpuTexture lowResolutionTexture;
 	private static volatile GpuTextureView lowResolutionTextureView;
 	private static volatile VirtualTextureGpuPageTable virtualTextureGpuPageTable;
@@ -103,6 +104,7 @@ public final class AtlasPreviewState {
 		int atlasHeight;
 		int mipLevelCount;
 		int downscaleFactor;
+		boolean reducePbr;
 		GpuTexture highResolutionTexture;
 		synchronized (AtlasPreviewState.class) {
 			buildGeneration = generation;
@@ -114,6 +116,7 @@ public final class AtlasPreviewState {
 			mipLevelCount = highResolutionTexture.getMipLevels();
 			regions = snapshotRegions(atlas, atlasWidth, atlasHeight);
 			downscaleFactor = selectDownscaleFactor(regions, atlasWidth, atlasHeight);
+			reducePbr = enableDistancePreview && SodiumLodBridge.isIrisShaderPackInUse();
 		} catch (RuntimeException exception) {
 			BUILDING.set(false);
 			throw exception;
@@ -127,7 +130,8 @@ public final class AtlasPreviewState {
 					atlasWidth,
 					atlasHeight,
 					mipLevelCount,
-					downscaleFactor
+					downscaleFactor,
+					reducePbr
 				);
 			} catch (IOException exception) {
 				throw new java.util.concurrent.CompletionException(exception);
@@ -168,7 +172,7 @@ public final class AtlasPreviewState {
 					net.minecraft.network.chat.Component.literal(
 						(enableDistancePreview
 							? SodiumLodBridge.isIrisShaderPackInUse()
-								? "Reduced albedo preview enabled. Iris shaderpack detected; all terrain uses low-resolution albedo and PBR maps stay full resolution. "
+								? "Reduced albedo preview enabled. Iris shaderpack detected; all terrain uses low-resolution albedo and Iris PBR maps are reduced to match. "
 								: "Streamed albedo LOD enabled. Nearby terrain uses the bounded high-resolution tile cache, and the low atlas is the fallback. "
 							: "Separate low-resolution block atlas enabled. Run /lods preview-high to switch back. ")
 							+ "Low atlas is " + lowResolutionTexture.getWidth(0) + "x"
@@ -421,6 +425,10 @@ public final class AtlasPreviewState {
 		return ((AbstractTextureAccessor) atlas).loadsOfLods$getTexture();
 	}
 
+	public static boolean isReducedPbrAtlas(Object pbrAtlas) {
+		return pbrAtlas != null && reducedPbrAtlases.contains(pbrAtlas);
+	}
+
 	public static boolean isStreamedAtlasActive() {
 		return atlasOwnsLowResolutionTexture;
 	}
@@ -482,6 +490,7 @@ public final class AtlasPreviewState {
 			generation++;
 			detachAtlasOwnedLowResolutionTexture();
 			closeLowResolutionTexture();
+			reducedPbrAtlases = List.of();
 		}
 	}
 
@@ -552,7 +561,8 @@ public final class AtlasPreviewState {
 		int atlasWidth,
 		int atlasHeight,
 		int mipLevelCount,
-		int downscaleFactor
+		int downscaleFactor,
+		boolean reducePbr
 	) throws IOException {
 		if (mipLevelCount <= 0) {
 			throw new IOException("The source block atlas has no mip levels");
@@ -653,8 +663,23 @@ public final class AtlasPreviewState {
 			for (int level = 1; level < lowMipLevelCount; level++) {
 				mipLevels.add(createMipLevel(mipLevels.get(level - 1), lowRegions, level));
 			}
+			IrisPbrAtlasReducer.Images pbrImages = null;
+			if (reducePbr) {
+				try {
+					pbrImages = IrisPbrAtlasReducer.build(
+						resourceManager,
+						regions,
+						lowAtlasWidth,
+						lowAtlasHeight,
+						lowMipLevelCount,
+						downscaleFactor
+					);
+				} catch (IOException | RuntimeException exception) {
+					LoadsOfLods.LOGGER.error("Could not reduce Iris PBR maps; they stay full resolution", exception);
+				}
+			}
 			LoadsOfLods.LOGGER.info(
-				"Built low-resolution albedo atlas preview: {}x{}, scale 1:{}, {} sprites, {} skipped, {}/{} animated sprites synchronized, {} mip levels; PBR maps are unchanged",
+				"Built low-resolution albedo atlas preview: {}x{}, scale 1:{}, {} sprites, {} skipped, {}/{} animated sprites synchronized, {} mip levels; PBR maps {}",
 				lowAtlasWidth,
 				lowAtlasHeight,
 				downscaleFactor,
@@ -662,12 +687,14 @@ public final class AtlasPreviewState {
 				skippedSprites,
 				animatedSpritesCached,
 				animatedSprites,
-				lowMipLevelCount
+				lowMipLevelCount,
+				pbrImages != null ? "reduced" : "unchanged"
 			);
 			return new LowAtlasImage(
 				mipLevels,
 				downscaleFactor,
-				animatedSpriteData
+				animatedSpriteData,
+				pbrImages
 			);
 		} catch (RuntimeException | Error exception) {
 			for (NativeImage mipLevel : mipLevels) {
@@ -858,7 +885,7 @@ public final class AtlasPreviewState {
 		return (alpha << 24) | (red << 16) | (green << 8) | blue;
 	}
 
-	private static SpriteRegion scaleRegion(SpriteRegion region, int factor) {
+	static SpriteRegion scaleRegion(SpriteRegion region, int factor) {
 		return new SpriteRegion(
 			region.identifier(),
 			region.x() / factor,
@@ -968,6 +995,9 @@ public final class AtlasPreviewState {
 			animatedStateMismatchLogged = false;
 			if (releaseHighResolutionAtlas) {
 				replaceBlockAtlasWithLowResolution(atlas, highResolutionTexture, texture, textureView);
+				if (image.pbrImages() != null) {
+					reducedPbrAtlases = IrisPbrAtlasReducer.apply(atlas, image.pbrImages(), image.downscaleFactor());
+				}
 			}
 			initialized = true;
 		} finally {
@@ -1154,7 +1184,6 @@ public final class AtlasPreviewState {
 		distancePreviewEnabled = false;
 		previewedAtlas = null;
 		virtualTextureLayout = null;
-		VIRTUAL_TEXTURE_REQUEST_TRACKER.clear();
 		pendingVirtualTextureQuads.clear();
 		pendingVirtualTextureTiles.clear();
 		animatedVirtualTextureTiles.clear();
@@ -1459,7 +1488,21 @@ public final class AtlasPreviewState {
 		return (alpha << 24) | (red << 16) | (green << 8) | blue;
 	}
 
+	@FunctionalInterface
+	interface PixelAverager {
+		int average(int first, int second, int third, int fourth);
+	}
+
 	private static NativeImage createMipLevel(NativeImage previous, List<SpriteRegion> regions, int level) {
+		return createMipLevel(previous, regions, level, AtlasPreviewState::averagePixels);
+	}
+
+	static NativeImage createMipLevel(
+		NativeImage previous,
+		List<SpriteRegion> regions,
+		int level,
+		PixelAverager averager
+	) {
 		int width = Math.max(1, previous.getWidth() >> 1);
 		int height = Math.max(1, previous.getHeight() >> 1);
 		NativeImage mipLevel = new NativeImage(width, height, true);
@@ -1486,7 +1529,7 @@ public final class AtlasPreviewState {
 						int x1 = Math.clamp(x * 2 + 1, sourceLeft, sourceRight - 1);
 						int y0 = Math.clamp(y * 2, sourceTop, sourceBottom - 1);
 						int y1 = Math.clamp(y * 2 + 1, sourceTop, sourceBottom - 1);
-						mipLevel.setPixel(x, y, averagePixels(
+						mipLevel.setPixel(x, y, averager.average(
 							previous.getPixel(x0, y0),
 							previous.getPixel(x1, y0),
 							previous.getPixel(x0, y1),
@@ -1633,7 +1676,7 @@ public final class AtlasPreviewState {
 		}
 	}
 
-	private record SpriteRegion(
+	record SpriteRegion(
 		Identifier identifier,
 		int x,
 		int y,
@@ -1719,16 +1762,23 @@ public final class AtlasPreviewState {
 		private final List<NativeImage> mipLevels;
 		private final int downscaleFactor;
 		private final List<AnimatedSpriteData> animatedSprites;
+		private final IrisPbrAtlasReducer.Images pbrImages;
 		private boolean animationsTransferred;
 
 		private LowAtlasImage(
 			List<NativeImage> mipLevels,
 			int downscaleFactor,
-			List<AnimatedSpriteData> animatedSprites
+			List<AnimatedSpriteData> animatedSprites,
+			IrisPbrAtlasReducer.Images pbrImages
 		) {
 			this.mipLevels = List.copyOf(mipLevels);
 			this.downscaleFactor = downscaleFactor;
 			this.animatedSprites = List.copyOf(animatedSprites);
+			this.pbrImages = pbrImages;
+		}
+
+		private IrisPbrAtlasReducer.Images pbrImages() {
+			return pbrImages;
 		}
 
 		private List<NativeImage> mipLevels() {
@@ -1747,6 +1797,9 @@ public final class AtlasPreviewState {
 		@Override
 		public void close() {
 			closeImages(mipLevels);
+			if (pbrImages != null) {
+				pbrImages.close();
+			}
 			if (!animationsTransferred) {
 				closeAnimatedSprites(animatedSprites);
 			}

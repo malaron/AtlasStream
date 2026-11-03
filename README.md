@@ -31,8 +31,11 @@ low-resolution fallback in this mode. Reload resource packs to restore the
 full-resolution atlas. With an Iris shaderpack active, terrain consistently
 uses the reduced albedo atlas instead of splitting sections between high and
 low resolutions. This avoids the visible hard boundary and the extra two-pass
-draw overhead. Iris normal (`_n`) and specular (`_s`) PBR maps remain at their
-original resolution; the mod registers the reduced atlas with Iris's texture
+draw overhead. Iris normal (`_n`) and specular (`_s`) LabPBR maps are reduced
+to the same ratio with per-channel averaging (normals are renormalized; alpha,
+which carries POM height and emission, is averaged independently rather than
+used as a weight). Animated PBR sprites use their first frame. The mod registers
+the reduced atlas with Iris's texture
 tracker so Iris still finds them. The full-resolution albedo atlas is released
 in this mode to save its VRAM, and no high-resolution tile cache is used (only
 its minimum allocation); nearby terrain also remains reduced
@@ -96,18 +99,15 @@ Run `/lods preview-distance` to assign solid and cutout Sodium chunk sections
 to the high-resolution tile cache or low-resolution fallback using the
 configured distance and hysteresis. Translucent terrain stays on the low
 fallback in streamed mode to avoid cross-atlas sorting artifacts. With Iris
-present, albedo LOD still works, while Iris's original
-full-resolution normal/specular maps remain bound in both low-preview and
-distance-preview modes. This preserves shader-specific POM height and packed
-material data; the mod does not currently build, downscale, or substitute PBR
-maps. Iris's active shader samplers are refreshed at high/low draw boundaries.
-Iris shaderpack terrain currently uses a hard per-section albedo switch with
-the original normal/specular maps. Generic shaderpack crossfading is not
+present, albedo LOD still works. In distance-preview mode Iris's PBR atlases
+are reduced alongside the albedo atlas; in low-preview mode the original
+full-resolution normal/specular maps stay bound. Iris's active shader samplers
+are refreshed at high/low draw boundaries.
+Iris shaderpack terrain currently uses a hard per-section albedo switch.
+Generic shaderpack crossfading is not
 enabled because Iris's current shader source hook does not reliably preserve
 injected declarations through its compilation pipeline.
-PBR map downscaling, animation, and shader-specific conventions are deferred
-to later work. Streamed mode releases only the full-resolution albedo atlas;
-Iris's PBR maps and other GPU resources remain resident.
+Streamed mode releases the full-resolution albedo atlas.
 Animated albedo sprites follow
 Minecraft's frame sequence and interpolation state; animation frame caches
 share the 1 GiB CPU image safety limit. The repeating Nether portal sprite's
@@ -153,8 +153,8 @@ when a nearer section uses it. Fine mip levels remain higher priority than
 distance within each mip level. Tile keys include atlas generation and mip level so
 stale resource-pack tiles can be invalidated cleanly. Streamed mode releases
 the full-resolution albedo atlas and replaces it with the bounded tile cache
-for near terrain. PBR atlases remain full-resolution, so this saves only the
-albedo-atlas portion of VRAM. Other consumers of Minecraft's shared block
+for near terrain. With Iris, the PBR atlases are reduced as well; without
+Iris there are none, so the saving is the albedo atlas. Other consumers of Minecraft's shared block
 atlas see the low-resolution fallback until resource packs are reloaded.
 Use `/lods cache` during `/lods preview-distance` to see resident-tile and
 pending-request counts.
