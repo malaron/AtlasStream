@@ -46,11 +46,19 @@ final class VramReport {
 				}
 			}
 		}
+		Class<?> holderInterface = null;
+		try {
+			holderInterface = Class.forName("net.irisshaders.iris.pbr.texture.PBRTextureHolder", false, VramReport.class.getClassLoader());
+		} catch (ClassNotFoundException ignored) {
+		}
 		for (Map.Entry<Integer, Object> holder : IrisPbrAtlasReducer.loadedHolders().entrySet()) {
 			Object value = holder.getValue();
+			if (holderInterface == null) {
+				break;
+			}
 			for (String method : new String[] {"normalTexture", "specularTexture"}) {
 				try {
-					Object texture = value.getClass().getMethod(method).invoke(value);
+					Object texture = holderInterface.getMethod(method).invoke(value);
 					if (texture instanceof AbstractTexture abstractTexture) {
 						add(entries, seen, "iris-pbr:" + holder.getKey() + ":" + method, abstractTexture);
 					}
