@@ -22,6 +22,19 @@ final class VramReport {
 	private VramReport() {
 	}
 
+	private static List<String> cachedSummary = List.of();
+	private static long cachedSummaryNanos;
+
+	// Textures change rarely, so the F3 line refreshes at most once per second.
+	static synchronized List<String> summary() {
+		long now = System.nanoTime();
+		if (now - cachedSummaryNanos > 1_000_000_000L) {
+			cachedSummaryNanos = now;
+			cachedSummary = build(3);
+		}
+		return cachedSummary;
+	}
+
 	static List<String> build(int topCount) {
 		Set<GpuTexture> seen = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
 		List<Entry> entries = new ArrayList<>();

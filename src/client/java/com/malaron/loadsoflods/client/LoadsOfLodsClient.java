@@ -24,6 +24,9 @@ public class LoadsOfLodsClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 		AtlasBuildCommand.register();
+		LodDebugEntry.register();
+		net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents.CLIENT_STARTED
+			.register(LodDebugEntry::enableOnce);
 		ClientTickEvents.END_CLIENT_TICK.register(client -> AtlasPreviewState.serviceVirtualTextureRequests());
 		config = LodConfig.load(
 			FabricLoader.getInstance().getConfigDir().resolve("loads-of-lods.properties")

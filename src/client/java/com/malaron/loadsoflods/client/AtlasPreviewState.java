@@ -429,6 +429,35 @@ public final class AtlasPreviewState {
 		return pbrAtlas != null && reducedPbrAtlases.contains(pbrAtlas);
 	}
 
+	public static synchronized List<String> debugLines() {
+		List<String> lines = new ArrayList<>();
+		GpuTexture low = lowResolutionTexture;
+		if (previewedAtlas == null || low == null) {
+			lines.add("[Loads of Lods] inactive");
+			return lines;
+		}
+		String mode = distancePreviewEnabled
+			? (SodiumLodBridge.isIrisShaderPackInUse() ? "distance (Iris, reduced)" : "distance (streamed)")
+			: "low preview";
+		lines.add(
+			"[Loads of Lods] " + mode + " 1:" + lowAtlasDownscaleFactor + " atlas "
+				+ low.getWidth(0) + "x" + low.getHeight(0)
+				+ (atlasOwnsLowResolutionTexture ? ", full atlas released" : ", full atlas resident")
+		);
+		if (!reducedPbrAtlases.isEmpty()) {
+			lines.add("[Loads of Lods] Iris PBR atlases reduced: " + reducedPbrAtlases.size() + "/2");
+		}
+		VirtualTextureCacheStatus status = virtualTextureCacheStatus();
+		if (status.available() && !SodiumLodBridge.isIrisShaderPackInUse()) {
+			lines.add(
+				"[Loads of Lods] tile cache " + status.residentTiles() + " tiles, "
+					+ status.usedBytes() / (1024 * 1024) + "/" + status.capacityBytes() / (1024 * 1024)
+					+ " MiB, " + status.pendingTiles() + " pending"
+			);
+		}
+		return lines;
+	}
+
 	public static boolean isStreamedAtlasActive() {
 		return atlasOwnsLowResolutionTexture;
 	}
