@@ -66,13 +66,27 @@ final class IrisPbrAtlasReducer {
 	static List<Object> apply(TextureAtlas atlas, Images images, int factor) {
 		List<Object> reduced = new ArrayList<>();
 		try {
-			Object holder = atlas.getClass().getMethod("getPBRHolder").invoke(atlas);
+			// Iris builds its PBR atlases lazily per albedo GL id, so load the holder for the reduced atlas now.
+			GpuTexture albedo = ((AbstractTextureAccessor) atlas).loadsOfLods$getTexture();
+			int glId = (Integer) albedo.getClass().getMethod("iris$getGlId").invoke(albedo);
+			Class<?> managerClass = Class.forName(
+				"net.irisshaders.iris.pbr.texture.PBRTextureManager",
+				false,
+				IrisPbrAtlasReducer.class.getClassLoader()
+			);
+			Object manager = managerClass.getField("INSTANCE").get(null);
+			Object holder = managerClass.getMethod("getOrLoadHolder", int.class).invoke(manager, glId);
 			if (holder == null) {
-				LoadsOfLods.LOGGER.info("Iris has no PBR atlases for the block atlas; nothing to reduce");
+				LoadsOfLods.LOGGER.info("Iris has no PBR holder for the block atlas; nothing to reduce");
 				return reduced;
 			}
-			swap(holder.getClass().getMethod("getNormalAtlas").invoke(holder), images.normal(), factor, "normal", reduced);
-			swap(holder.getClass().getMethod("getSpecularAtlas").invoke(holder), images.specular(), factor, "specular", reduced);
+			Class<?> holderInterface = Class.forName(
+				"net.irisshaders.iris.pbr.texture.PBRTextureHolder",
+				false,
+				IrisPbrAtlasReducer.class.getClassLoader()
+			);
+			swap(holderInterface.getMethod("normalTexture").invoke(holder), images.normal(), factor, "normal", reduced);
+			swap(holderInterface.getMethod("specularTexture").invoke(holder), images.specular(), factor, "specular", reduced);
 		} catch (ReflectiveOperationException | RuntimeException exception) {
 			LoadsOfLods.LOGGER.error("Could not reduce Iris PBR atlases", exception);
 		}
@@ -81,6 +95,7 @@ final class IrisPbrAtlasReducer {
 
 	private static void swap(Object pbrAtlas, List<NativeImage> mips, int factor, String label, List<Object> reduced) {
 		if (!(pbrAtlas instanceof AbstractTexture texture)) {
+			LoadsOfLods.LOGGER.warn("Iris {} PBR texture is not available for reduction", label);
 			return;
 		}
 		AbstractTextureAccessor accessor = (AbstractTextureAccessor) texture;
