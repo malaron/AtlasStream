@@ -994,9 +994,12 @@ public final class AtlasPreviewState {
 			animatedSprites = image.transferAnimatedSprites();
 			animatedStateMismatchLogged = false;
 			if (releaseHighResolutionAtlas) {
+				Object pbrHolder = image.pbrImages() != null
+					? IrisPbrAtlasReducer.detachHolder(highResolutionTexture)
+					: null;
 				replaceBlockAtlasWithLowResolution(atlas, highResolutionTexture, texture, textureView);
 				if (image.pbrImages() != null) {
-					reducedPbrAtlases = IrisPbrAtlasReducer.apply(atlas, image.pbrImages(), image.downscaleFactor());
+					reducedPbrAtlases = IrisPbrAtlasReducer.apply(pbrHolder, texture, image.pbrImages(), image.downscaleFactor());
 				}
 			}
 			initialized = true;

@@ -2,8 +2,10 @@ package com.malaron.loadsoflods.client;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import com.malaron.loadsoflods.LoadsOfLods;
@@ -62,31 +64,54 @@ final class IrisPbrAtlasReducer {
 		}
 	}
 
-	// Returns the PBR atlas objects that now own reduced textures, so Iris's full-size animation uploads can be skipped.
-	static List<Object> apply(TextureAtlas atlas, Images images, int factor) {
-		List<Object> reduced = new ArrayList<>();
+	private static Object irisManager() throws ReflectiveOperationException {
+		Class<?> managerClass = Class.forName(
+			"net.irisshaders.iris.pbr.texture.PBRTextureManager",
+			false,
+			IrisPbrAtlasReducer.class.getClassLoader()
+		);
+		return managerClass.getField("INSTANCE").get(null);
+	}
+
+	@SuppressWarnings("unchecked")
+	private static Map<Integer, Object> irisHolders(Object manager) throws ReflectiveOperationException {
+		Field field = manager.getClass().getDeclaredField("holders");
+		field.setAccessible(true);
+		return (Map<Integer, Object>) field.get(manager);
+	}
+
+	// Removes Iris's already-loaded PBR holder for the original atlas without closing it, so its textures can be
+	// shrunk and re-registered under the reduced atlas's GL id. Returns null if Iris has not loaded one.
+	static Object detachHolder(GpuTexture original) {
 		try {
-			// Iris builds its PBR atlases lazily per albedo GL id, so load the holder for the reduced atlas now.
-			GpuTexture albedo = ((AbstractTextureAccessor) atlas).loadsOfLods$getTexture();
-			int glId = (Integer) albedo.getClass().getMethod("iris$getGlId").invoke(albedo);
-			Class<?> managerClass = Class.forName(
-				"net.irisshaders.iris.pbr.texture.PBRTextureManager",
-				false,
-				IrisPbrAtlasReducer.class.getClassLoader()
-			);
-			Object manager = managerClass.getField("INSTANCE").get(null);
-			Object holder = managerClass.getMethod("getOrLoadHolder", int.class).invoke(manager, glId);
-			if (holder == null) {
-				LoadsOfLods.LOGGER.info("Iris has no PBR holder for the block atlas; nothing to reduce");
-				return reduced;
-			}
+			int glId = (Integer) original.getClass().getMethod("iris$getGlId").invoke(original);
+			return irisHolders(irisManager()).remove(glId);
+		} catch (ReflectiveOperationException | RuntimeException exception) {
+			LoadsOfLods.LOGGER.error("Could not detach Iris PBR holder", exception);
+			return null;
+		}
+	}
+
+	// Returns the PBR atlas objects that now own reduced textures, so Iris's full-size animation uploads can be skipped.
+	static List<Object> apply(Object holder, GpuTexture reducedAlbedo, Images images, int factor) {
+		List<Object> reduced = new ArrayList<>();
+		if (holder == null) {
+			LoadsOfLods.LOGGER.info("Iris had not loaded PBR maps for the block atlas; nothing to reduce");
+			return reduced;
+		}
+		try {
 			Class<?> holderInterface = Class.forName(
 				"net.irisshaders.iris.pbr.texture.PBRTextureHolder",
 				false,
 				IrisPbrAtlasReducer.class.getClassLoader()
 			);
-			swap(holderInterface.getMethod("normalTexture").invoke(holder), images.normal(), factor, "normal", reduced);
-			swap(holderInterface.getMethod("specularTexture").invoke(holder), images.specular(), factor, "specular", reduced);
+			try {
+				swap(holderInterface.getMethod("normalTexture").invoke(holder), images.normal(), factor, "normal", reduced);
+				swap(holderInterface.getMethod("specularTexture").invoke(holder), images.specular(), factor, "specular", reduced);
+			} finally {
+				int newId = (Integer) reducedAlbedo.getClass().getMethod("iris$getGlId").invoke(reducedAlbedo);
+				irisHolders(irisManager()).put(newId, holder);
+			}
 		} catch (ReflectiveOperationException | RuntimeException exception) {
 			LoadsOfLods.LOGGER.error("Could not reduce Iris PBR atlases", exception);
 		}
