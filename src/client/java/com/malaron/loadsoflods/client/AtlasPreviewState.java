@@ -138,8 +138,7 @@ public final class AtlasPreviewState {
 					Throwable cause = failure.getCause() == null ? failure : failure.getCause();
 					throw new IllegalStateException("Could not build the low-resolution block atlas", cause);
 				}
-				boolean releaseHighResolutionAtlas = enableDistancePreview
-					&& !SodiumLodBridge.isIrisShaderPackInUse();
+				boolean releaseHighResolutionAtlas = enableDistancePreview;
 				try (image) {
 					boolean currentAtlas;
 					synchronized (AtlasPreviewState.class) {
@@ -168,9 +167,9 @@ public final class AtlasPreviewState {
 				source.sendFeedback(
 					net.minecraft.network.chat.Component.literal(
 						(enableDistancePreview
-							? releaseHighResolutionAtlas
-								? "Streamed albedo LOD enabled. Nearby terrain uses the bounded high-resolution tile cache, and the low atlas is the fallback. "
-								: "Reduced albedo preview enabled. Iris shaderpack detected; all terrain uses low-resolution albedo while the full atlas and PBR maps remain resident. "
+							? SodiumLodBridge.isIrisShaderPackInUse()
+								? "Reduced albedo preview enabled. Iris shaderpack detected; all terrain uses low-resolution albedo and PBR maps stay full resolution. "
+								: "Streamed albedo LOD enabled. Nearby terrain uses the bounded high-resolution tile cache, and the low atlas is the fallback. "
 							: "Separate low-resolution block atlas enabled. Run /lods preview-high to switch back. ")
 							+ "Low atlas is " + lowResolutionTexture.getWidth(0) + "x"
 							+ lowResolutionTexture.getHeight(0)
@@ -379,8 +378,7 @@ public final class AtlasPreviewState {
 		if (!hasLowAtlas()) {
 			throw new IllegalStateException("Run /lods preview-distance to build the low-resolution atlas first");
 		}
-		if (!atlasOwnsLowResolutionTexture && lowPreviewEnabled
-				&& !SodiumLodBridge.isIrisShaderPackInUse()) {
+		if (!atlasOwnsLowResolutionTexture && lowPreviewEnabled) {
 			TextureAtlas atlas = previewedAtlas;
 			AbstractTextureAccessor textureAccessor = (AbstractTextureAccessor) atlas;
 			GpuTexture highResolutionTexture = textureAccessor.loadsOfLods$getTexture();
@@ -929,10 +927,10 @@ public final class AtlasPreviewState {
 				long mipSize = Math.max(1, VIRTUAL_TILE_SIZE >> mip);
 				minimumCacheBytes = Math.addExact(minimumCacheBytes, mipSize * mipSize * 4);
 			}
-			long cacheBudgetBytes = Math.max(
-				minimumCacheBytes,
-				Math.min(configuredBudgetBytes, atlasBudgetBytes)
-			);
+			// Iris terrain never samples virtual tiles, so keep the cache at its minimum size.
+			long cacheBudgetBytes = SodiumLodBridge.isIrisShaderPackInUse()
+				? minimumCacheBytes
+				: Math.max(minimumCacheBytes, Math.min(configuredBudgetBytes, atlasBudgetBytes));
 			tileCache = new VirtualTextureGpuCache(
 				pageTable,
 				VIRTUAL_TILE_SIZE,
@@ -1317,6 +1315,7 @@ public final class AtlasPreviewState {
 		textureAccessor.loadsOfLods$setTexture(lowResolutionTexture);
 		textureAccessor.loadsOfLods$setTextureView(lowResolutionTextureView);
 		atlasOwnsLowResolutionTexture = true;
+		SodiumLodBridge.trackAtlasForIris(lowResolutionTexture, atlas, highResolutionTexture);
 
 		for (GpuTextureView mipView : oldMipViews) {
 			if (mipView != null && mipView != oldTextureView) {

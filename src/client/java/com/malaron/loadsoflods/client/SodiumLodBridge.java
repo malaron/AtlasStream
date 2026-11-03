@@ -202,6 +202,46 @@ public final class SodiumLodBridge {
 
 	// Iris finds normal/specular maps by the bound albedo texture's GL id. Keep that lookup on the
 	// original atlas so PBR stays untouched while the albedo atlas is reduced.
+	// Iris resolves PBR maps through TextureTracker's GL-id map, which only learns the atlas at upload time.
+	public static void trackAtlasForIris(
+		com.mojang.renderpearl.api.textures.GpuTexture texture,
+		Object atlas,
+		com.mojang.renderpearl.api.textures.GpuTexture releasedTexture
+	) {
+		if (!FabricLoader.getInstance().isModLoaded("iris")) {
+			return;
+		}
+		try {
+			int glId = (Integer) texture.getClass().getMethod("iris$getGlId").invoke(texture);
+			Class<?> trackerClass = Class.forName(
+				"net.irisshaders.iris.pbr.TextureTracker",
+				false,
+				SodiumLodBridge.class.getClassLoader()
+			);
+			Object tracker = trackerClass.getField("INSTANCE").get(null);
+			trackerClass.getMethod(
+				"trackTexture",
+				int.class,
+				net.minecraft.client.renderer.texture.AbstractTexture.class
+			).invoke(tracker, glId, atlas);
+			if (releasedTexture != null) {
+				// Drops Iris's PBR holder keyed by the old id so its maps are rebuilt once under the new id, not duplicated.
+				int releasedId = (Integer) releasedTexture.getClass().getMethod("iris$getGlId").invoke(releasedTexture);
+				Class<?> managerClass = Class.forName(
+					"net.irisshaders.iris.pbr.texture.PBRTextureManager",
+					false,
+					SodiumLodBridge.class.getClassLoader()
+				);
+				Object manager = managerClass.getField("INSTANCE").get(null);
+				managerClass.getMethod("onDeleteTexture", int.class).invoke(manager, releasedId);
+			}
+		} catch (ReflectiveOperationException | RuntimeException exception) {
+			if (IRIS_PBR_LOOKUP_FAILURE_LOGGED.compareAndSet(false, true)) {
+				LoadsOfLods.LOGGER.error("Could not register the reduced atlas with Iris", exception);
+			}
+		}
+	}
+
 	public static int irisPbrLookupTextureId(com.mojang.renderpearl.api.textures.GpuTexture bound) {
 		try {
 			Object source = AtlasPreviewState.originalAtlasTextureForPbr(bound);

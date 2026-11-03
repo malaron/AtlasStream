@@ -32,8 +32,10 @@ full-resolution atlas. With an Iris shaderpack active, terrain consistently
 uses the reduced albedo atlas instead of splitting sections between high and
 low resolutions. This avoids the visible hard boundary and the extra two-pass
 draw overhead. Iris normal (`_n`) and specular (`_s`) PBR maps remain at their
-original resolution and bindings. The original block atlas stays resident in
-this mode, so it does not save its VRAM; nearby terrain also remains reduced
+original resolution; the mod registers the reduced atlas with Iris's texture
+tracker so Iris still finds them. The full-resolution albedo atlas is released
+in this mode to save its VRAM, and no high-resolution tile cache is used (only
+its minimum allocation); nearby terrain also remains reduced
 until a reliable shader-level transition is available. Translucent terrain
 remains on the low atlas to avoid cross-atlas sorting artifacts when distance
 LOD is active. Animated low-atlas sprites follow Minecraft's frame sequence

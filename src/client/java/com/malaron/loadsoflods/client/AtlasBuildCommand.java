@@ -128,11 +128,9 @@ public final class AtlasBuildCommand {
 						(irisShaderpack
 							? "Reduced albedo preview enabled with Iris. All terrain uses the low-resolution albedo atlas; PBR maps remain untouched."
 							: "Streamed albedo LOD enabled. Nearby terrain uses the bounded high-resolution tile cache, and the low atlas is the fallback.")
-							+ (irisShaderpack
-								? " The original atlas remains resident; this avoids the high/low boundary and two-pass LOD overhead, but does not save its VRAM."
-								: AtlasPreviewState.isOriginalAtlasReleaseConfirmed()
+							+ (AtlasPreviewState.isOriginalAtlasReleaseConfirmed()
 								? " The full block atlas was released; reload resource packs to restore it."
-									: " The full atlas release could not be confirmed; check latest.log.")
+								: " The full atlas release could not be confirmed; check latest.log.")
 					)
 				);
 			} else {
