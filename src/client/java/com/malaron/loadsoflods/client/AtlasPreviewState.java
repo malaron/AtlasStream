@@ -1,0 +1,1756 @@
+package com.malaron.loadsoflods.client;
+
+import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import javax.imageio.ImageIO;
+
+import com.malaron.loadsoflods.LoadsOfLods;
+import com.malaron.loadsoflods.cache.VirtualTextureTileBuilder;
+import com.malaron.loadsoflods.cache.VirtualTextureTileBuilder.MipImage;
+import com.malaron.loadsoflods.cache.VirtualTextureTileBuilder.SpriteSource;
+import com.malaron.loadsoflods.cache.VirtualTextureTileBuilder.TileMip;
+import com.malaron.loadsoflods.cache.VirtualTextureLayout;
+import com.malaron.loadsoflods.cache.VirtualTextureRequestTracker;
+import com.malaron.loadsoflods.cache.VirtualTextureTileKey;
+import com.malaron.loadsoflods.cache.VirtualTextureTileRequestQueue;
+import com.mojang.blaze3d.platform.NativeImage;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.renderpearl.api.GpuFormat;
+import com.mojang.renderpearl.api.textures.GpuTexture;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
+import com.malaron.loadsoflods.client.mixin.AbstractTextureAccessor;
+import com.malaron.loadsoflods.client.mixin.SpriteAnimationStateAccessor;
+import com.malaron.loadsoflods.client.mixin.SpriteContentsAccessor;
+import com.malaron.loadsoflods.client.mixin.TextureAtlasAccessor;
+import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.texture.SpriteContents;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+import net.minecraft.client.resources.metadata.animation.AnimationFrame;
+import net.minecraft.client.resources.metadata.animation.AnimationMetadataSection;
+import net.minecraft.client.resources.metadata.animation.FrameSize;
+import net.minecraft.resources.Identifier;
+import net.minecraft.server.packs.resources.Resource;
+import net.minecraft.server.packs.resources.ResourceManager;
+
+public final class AtlasPreviewState {
+	private static final int DOWNSCALE_FACTOR = 4;
+	private static final int VIRTUAL_TILE_SIZE = 128;
+	private static final long MAX_PREVIEW_BYTES = 1024L * 1024 * 1024;
+	private static final int MAX_PENDING_TILE_REQUESTS = 8192;
+	private static final int MAX_UV_QUADS_PER_TICK = 128;
+	private static final int MAX_TILE_KEYS_PER_TICK = 512;
+	private static final int MAX_TILE_UPLOADS_PER_TICK = 4;
+	private static final long MAX_TILE_UPLOAD_TIME_NANOS_PER_TICK = 4_000_000L;
+	private static final AtomicBoolean BUILDING = new AtomicBoolean();
+	private static final VirtualTextureRequestTracker VIRTUAL_TEXTURE_REQUEST_TRACKER =
+		new VirtualTextureRequestTracker();
+	private static final ArrayDeque<VirtualTextureRequestTracker.UvQuad> pendingVirtualTextureQuads =
+		new ArrayDeque<>();
+	private static final VirtualTextureTileRequestQueue pendingVirtualTextureTiles =
+		new VirtualTextureTileRequestQueue(MAX_PENDING_TILE_REQUESTS);
+	private static final Set<VirtualTextureTileKey> animatedVirtualTextureTiles = new HashSet<>();
+	private static volatile boolean lowPreviewEnabled;
+	private static volatile boolean distancePreviewEnabled;
+	private static volatile TextureAtlas previewedAtlas;
+	private static volatile GpuTexture lowResolutionTexture;
+	private static volatile GpuTextureView lowResolutionTextureView;
+	private static volatile VirtualTextureGpuPageTable virtualTextureGpuPageTable;
+	private static volatile VirtualTextureTileBuilder virtualTextureTileBuilder;
+	private static volatile VirtualTextureGpuCache virtualTextureGpuCache;
+	private static volatile VirtualTextureLayout virtualTextureLayout;
+	private static VirtualTextureMetadataTexture virtualTextureMetadataTexture;
+	private static VirtualTextureGpuPageTable fallbackPageTable;
+	private static VirtualTextureGpuCache fallbackTileCache;
+	private static VirtualTextureMetadataTexture fallbackMetadataTexture;
+	private static boolean atlasOwnsLowResolutionTexture;
+	private static boolean originalAtlasReleaseConfirmed;
+	private static List<AnimatedSpriteData> animatedSprites = List.of();
+	private static boolean animatedStateMismatchLogged;
+	private static int lowAtlasDownscaleFactor = 1;
+	private static volatile long generation;
+	private static VirtualTextureRequestTracker.TileCursor activeVirtualTextureCursor;
+	private static double activeVirtualTextureDistanceSquared = Double.POSITIVE_INFINITY;
+
+	private AtlasPreviewState() {
+	}
+
+	public static void buildAndEnable(
+		TextureAtlas atlas,
+		ResourceManager resourceManager,
+		FabricClientCommandSource source,
+		boolean enableDistancePreview
+	) {
+		if (!BUILDING.compareAndSet(false, true)) {
+			throw new IllegalStateException("A low-resolution atlas preview build is already running");
+		}
+		long buildGeneration;
+		List<SpriteRegion> regions;
+		int atlasWidth;
+		int atlasHeight;
+		int mipLevelCount;
+		int downscaleFactor;
+		GpuTexture highResolutionTexture;
+		synchronized (AtlasPreviewState.class) {
+			buildGeneration = generation;
+		}
+		try {
+			highResolutionTexture = atlas.getTexture();
+			atlasWidth = highResolutionTexture.getWidth(0);
+			atlasHeight = highResolutionTexture.getHeight(0);
+			mipLevelCount = highResolutionTexture.getMipLevels();
+			regions = snapshotRegions(atlas, atlasWidth, atlasHeight);
+			downscaleFactor = selectDownscaleFactor(regions, atlasWidth, atlasHeight);
+		} catch (RuntimeException exception) {
+			BUILDING.set(false);
+			throw exception;
+		}
+
+		CompletableFuture.supplyAsync(() -> {
+			try {
+				return createLowAtlas(
+					resourceManager,
+					regions,
+					atlasWidth,
+					atlasHeight,
+					mipLevelCount,
+					downscaleFactor
+				);
+			} catch (IOException exception) {
+				throw new java.util.concurrent.CompletionException(exception);
+			}
+		}).whenComplete((image, failure) -> Minecraft.getInstance().execute(() -> {
+			try {
+				if (failure != null) {
+					Throwable cause = failure.getCause() == null ? failure : failure.getCause();
+					throw new IllegalStateException("Could not build the low-resolution block atlas", cause);
+				}
+				boolean releaseHighResolutionAtlas = enableDistancePreview
+					&& !SodiumLodBridge.isIrisShaderPackInUse();
+				try (image) {
+					boolean currentAtlas;
+					synchronized (AtlasPreviewState.class) {
+						currentAtlas = generation == buildGeneration
+							&& Minecraft.getInstance().getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS) == atlas;
+					}
+					if (!currentAtlas) {
+						LoadsOfLods.LOGGER.info("Discarding low-resolution atlas preview because the source atlas changed");
+						return;
+					}
+					createLowResolutionTexture(
+						atlas,
+						highResolutionTexture,
+						image,
+						regions,
+						releaseHighResolutionAtlas
+					);
+				}
+				updateAnimatedFrames(atlas);
+				previewedAtlas = atlas;
+				lowPreviewEnabled = !enableDistancePreview;
+				distancePreviewEnabled = enableDistancePreview;
+				if (enableDistancePreview) {
+					SodiumLodBridge.scheduleVisibleTerrainRebuild();
+				}
+				source.sendFeedback(
+					net.minecraft.network.chat.Component.literal(
+						(enableDistancePreview
+							? releaseHighResolutionAtlas
+								? "Streamed albedo LOD enabled. Nearby terrain uses the bounded high-resolution tile cache, and the low atlas is the fallback. "
+								: "Reduced albedo preview enabled. Iris shaderpack detected; all terrain uses low-resolution albedo while the full atlas and PBR maps remain resident. "
+							: "Separate low-resolution block atlas enabled. Run /lods preview-high to switch back. ")
+							+ "Low atlas is " + lowResolutionTexture.getWidth(0) + "x"
+							+ lowResolutionTexture.getHeight(0)
+							+ (releaseHighResolutionAtlas
+								? originalAtlasReleaseConfirmed
+									? ". The full block atlas was released. Reload resource packs to restore it."
+									: ". The original atlas allocation could not be confirmed as released; check latest.log."
+								: "")
+							+ " (1:" + image.downscaleFactor() + ")."
+					)
+				);
+			} catch (RuntimeException exception) {
+				LoadsOfLods.LOGGER.error("Could not activate low-resolution atlas preview", exception);
+				source.sendError(
+					net.minecraft.network.chat.Component.literal("Low-atlas preview failed: " + exception.getMessage())
+				);
+			} finally {
+				BUILDING.set(false);
+			}
+		}));
+	}
+
+	public static boolean isBuilding() {
+		return BUILDING.get();
+	}
+
+	public static boolean hasLowAtlas() {
+		return previewedAtlas != null && lowResolutionTexture != null && lowResolutionTextureView != null;
+	}
+
+	public static VirtualTextureGpuPageTable virtualTexturePageTable() {
+		VirtualTextureGpuPageTable pageTable = virtualTextureGpuPageTable;
+		if (pageTable == null) {
+			throw new IllegalStateException("Build the low atlas before requesting its virtual page table");
+		}
+		return pageTable;
+	}
+
+	public static synchronized int uploadHighResolutionTile(VirtualTextureTileKey key) {
+		VirtualTextureTileBuilder tileBuilder = virtualTextureTileBuilder;
+		if (tileBuilder == null || virtualTextureGpuPageTable == null) {
+			throw new IllegalStateException("Build the low atlas before uploading virtual texture tiles");
+		}
+		VirtualTextureGpuPageTable pageTable = virtualTextureGpuPageTable;
+		VirtualTextureGpuCache cache = virtualTextureGpuCache;
+		if (cache == null) {
+			throw new IllegalStateException("Virtual texture GPU cache was not initialized with the atlas");
+		}
+		Integer residentLayer = cache.get(key);
+		if (residentLayer != null) {
+			return residentLayer;
+		}
+		int cacheMipLevels = Math.min(
+			Integer.numberOfTrailingZeros(VIRTUAL_TILE_SIZE) + 1,
+			pageTable.layout().mipLevelCount()
+		);
+		List<TileMip> builtMips = tileBuilder.build(key, cacheMipLevels);
+		List<NativeImage> images = new ArrayList<>(builtMips.size());
+		try {
+			for (TileMip mip : builtMips) {
+				NativeImage image = new NativeImage(mip.width(), mip.height(), true);
+				images.add(image);
+				for (int y = 0; y < mip.height(); y++) {
+					for (int x = 0; x < mip.width(); x++) {
+						image.setPixel(x, y, mip.pixel(x, y));
+					}
+				}
+			}
+			return cache.upload(key, images);
+		} finally {
+			closeImages(images);
+		}
+	}
+
+	public static void recordChunkSpriteUsage(net.minecraft.client.renderer.texture.TextureAtlasSprite sprite) {
+		VIRTUAL_TEXTURE_REQUEST_TRACKER.recordSpriteUsage(
+			sprite.getU0(),
+			sprite.getV0(),
+			sprite.getU1(),
+			sprite.getV1(),
+			generation,
+			SodiumChunkMeshPriority.distanceSquared()
+		);
+	}
+
+	public static synchronized void serviceVirtualTextureRequests() {
+		VirtualTextureGpuPageTable pageTable = virtualTextureGpuPageTable;
+		VirtualTextureLayout layout = virtualTextureLayout;
+		if (!isDistancePreviewEnabled()
+				|| pageTable == null
+				|| layout == null
+				|| virtualTextureGpuCache == null
+				|| virtualTextureTileBuilder == null) {
+			return;
+		}
+		long currentGeneration = pageTable.layout().atlasGeneration();
+		for (VirtualTextureRequestTracker.UvQuad quad
+				: VIRTUAL_TEXTURE_REQUEST_TRACKER.drain(MAX_UV_QUADS_PER_TICK, currentGeneration)) {
+			pendingVirtualTextureQuads.addLast(quad);
+		}
+
+		int plannedKeys = 0;
+		while (plannedKeys < MAX_TILE_KEYS_PER_TICK) {
+			if (activeVirtualTextureCursor == null) {
+				VirtualTextureRequestTracker.UvQuad quad = pendingVirtualTextureQuads.pollFirst();
+				if (quad == null) {
+					break;
+				}
+				activeVirtualTextureCursor = VirtualTextureRequestTracker.cursor(
+					quad,
+					layout,
+					pageTable.layout().mipLevelCount()
+				);
+				activeVirtualTextureDistanceSquared = quad.distanceSquared();
+			}
+			VirtualTextureTileKey key = activeVirtualTextureCursor.next();
+			if (!animatedVirtualTextureTiles.contains(key)) {
+				VirtualTextureGpuCache cache = virtualTextureGpuCache;
+				if (cache != null) {
+					if (cache.get(key) == null) {
+						pendingVirtualTextureTiles.offer(key, activeVirtualTextureDistanceSquared);
+					}
+				}
+			}
+			plannedKeys++;
+			if (activeVirtualTextureCursor.isComplete()) {
+				activeVirtualTextureCursor = null;
+				activeVirtualTextureDistanceSquared = Double.POSITIVE_INFINITY;
+			}
+		}
+
+		long uploadStartNanos = System.nanoTime();
+		for (int uploads = 0; uploads < MAX_TILE_UPLOADS_PER_TICK; uploads++) {
+			if (uploads > 0 && System.nanoTime() - uploadStartNanos >= MAX_TILE_UPLOAD_TIME_NANOS_PER_TICK) {
+				break;
+			}
+			VirtualTextureTileKey key = pendingVirtualTextureTiles.poll();
+			if (key == null) {
+				break;
+			}
+			try {
+				VirtualTextureGpuCache cache = virtualTextureGpuCache;
+				if (cache != null && cache.get(key) == null) {
+					uploadHighResolutionTile(key);
+				}
+			} catch (VirtualTextureTileBuilder.AnimatedTileException ignored) {
+				// Animated sprites are intentionally left on the original atlas for now.
+				if (animatedVirtualTextureTiles.size() < MAX_PENDING_TILE_REQUESTS) {
+					animatedVirtualTextureTiles.add(key);
+				}
+			} catch (RuntimeException exception) {
+				LoadsOfLods.LOGGER.error("Could not stream virtual texture tile {}", key, exception);
+			}
+		}
+	}
+
+	public static synchronized VirtualTextureCacheStatus virtualTextureCacheStatus() {
+		VirtualTextureGpuCache cache = virtualTextureGpuCache;
+		if (cache == null) {
+			return new VirtualTextureCacheStatus(false, 0, 0, 0, 0, 0, 0, 0);
+		}
+		int pendingQuads = VIRTUAL_TEXTURE_REQUEST_TRACKER.pendingCount()
+			+ pendingVirtualTextureQuads.size()
+			+ (activeVirtualTextureCursor == null ? 0 : 1);
+		return new VirtualTextureCacheStatus(
+			true,
+			cache.size(),
+			cache.usedBytes(),
+			cache.capacityBytes(),
+			pendingVirtualTextureTiles.size(),
+			pendingQuads,
+			VIRTUAL_TEXTURE_REQUEST_TRACKER.completedQuadCount(),
+			VIRTUAL_TEXTURE_REQUEST_TRACKER.capturedSpriteUseCount()
+		);
+	}
+
+	public static synchronized VirtualTextureSamplingViews virtualTextureSamplingViews(boolean useVirtualTexture) {
+		VirtualTextureGpuPageTable pageTable = virtualTextureGpuPageTable;
+		VirtualTextureGpuCache cache = virtualTextureGpuCache;
+		VirtualTextureMetadataTexture metadata = virtualTextureMetadataTexture;
+		if (useVirtualTexture && pageTable != null && cache != null && metadata != null) {
+			return new VirtualTextureSamplingViews(cache.textureView(), pageTable.view(), metadata.view());
+		}
+		if (fallbackPageTable == null || fallbackTileCache == null || fallbackMetadataTexture == null) {
+			throw new IllegalStateException("Virtual texture fallback resources were not initialized before rendering");
+		}
+		return new VirtualTextureSamplingViews(
+			fallbackTileCache.textureView(),
+			fallbackPageTable.view(),
+			fallbackMetadataTexture.view()
+		);
+	}
+
+	public static void enableLowPreview() {
+		if (atlasOwnsLowResolutionTexture) {
+			throw new IllegalStateException("Reload resource packs to restore the released high-resolution atlas");
+		}
+		if (!hasLowAtlas()) {
+			throw new IllegalStateException("Run /lods preview-low to build and enable the low-resolution atlas");
+		}
+		lowPreviewEnabled = true;
+		distancePreviewEnabled = false;
+	}
+
+	public static void enableDistancePreview() {
+		if (!hasLowAtlas()) {
+			throw new IllegalStateException("Run /lods preview-distance to build the low-resolution atlas first");
+		}
+		if (!atlasOwnsLowResolutionTexture && lowPreviewEnabled
+				&& !SodiumLodBridge.isIrisShaderPackInUse()) {
+			TextureAtlas atlas = previewedAtlas;
+			AbstractTextureAccessor textureAccessor = (AbstractTextureAccessor) atlas;
+			GpuTexture highResolutionTexture = textureAccessor.loadsOfLods$getTexture();
+			if (virtualTextureGpuPageTable == null
+					|| virtualTextureGpuCache == null
+					|| virtualTextureMetadataTexture == null
+					|| virtualTextureTileBuilder == null) {
+				throw new IllegalStateException("The virtual texture cache is not initialized");
+			}
+			replaceBlockAtlasWithLowResolution(
+				atlas,
+				highResolutionTexture,
+				lowResolutionTexture,
+				lowResolutionTextureView
+			);
+		}
+		lowPreviewEnabled = false;
+		distancePreviewEnabled = true;
+	}
+
+	public static synchronized void disableLowPreview() {
+		lowPreviewEnabled = false;
+		distancePreviewEnabled = false;
+		if (BUILDING.get()) {
+			generation++;
+		}
+	}
+
+	public static boolean isDistancePreviewEnabled() {
+		return distancePreviewEnabled && hasLowAtlas();
+	}
+
+	// The untouched atlas texture that PBR maps were generated for, or null when it is not resident.
+	public static GpuTexture originalAtlasTextureForPbr(GpuTexture boundTexture) {
+		TextureAtlas atlas = previewedAtlas;
+		if (atlas == null || atlasOwnsLowResolutionTexture || boundTexture == null
+				|| boundTexture != lowResolutionTexture) {
+			return null;
+		}
+		return ((AbstractTextureAccessor) atlas).loadsOfLods$getTexture();
+	}
+
+	public static boolean isStreamedAtlasActive() {
+		return atlasOwnsLowResolutionTexture;
+	}
+
+	public static boolean isOriginalAtlasReleaseConfirmed() {
+		return originalAtlasReleaseConfirmed;
+	}
+
+	public static boolean shouldSkipVanillaAnimationUpload(TextureAtlas atlas) {
+		return atlasOwnsLowResolutionTexture && previewedAtlas == atlas;
+	}
+
+	public static GpuTextureView lowResolutionTextureViewForDistancePreview() {
+		if (!isDistancePreviewEnabled()) {
+			throw new IllegalStateException("Distance-based atlas preview is not active");
+		}
+		return lowResolutionTextureView;
+	}
+
+	public static boolean usesLowResolutionAtlas(TextureAtlas atlas) {
+		return lowPreviewEnabled && previewedAtlas == atlas && hasLowAtlas();
+	}
+
+	public static GpuTexture lowResolutionTexture(TextureAtlas atlas) {
+		if (!usesLowResolutionAtlas(atlas)) {
+			throw new IllegalStateException("The low-resolution atlas is not active");
+		}
+		return lowResolutionTexture;
+	}
+
+	public static GpuTextureView lowResolutionTextureView(TextureAtlas atlas) {
+		if (!usesLowResolutionAtlas(atlas)) {
+			throw new IllegalStateException("The low-resolution atlas is not active");
+		}
+		return lowResolutionTextureView;
+	}
+
+	public static synchronized void beforeAtlasReload(TextureAtlas atlas) {
+		if (TextureAtlas.LOCATION_BLOCKS.equals(atlas.location()) && previewedAtlas == atlas) {
+			lowPreviewEnabled = false;
+			distancePreviewEnabled = false;
+			detachAtlasOwnedLowResolutionTexture();
+		}
+	}
+
+	public static synchronized void invalidateForAtlasReload(TextureAtlas atlas) {
+		if (!TextureAtlas.LOCATION_BLOCKS.equals(atlas.location())) {
+			return;
+		}
+		ensureFallbackVirtualTextureResources();
+		generation++;
+		if (previewedAtlas == atlas) {
+			closeLowResolutionTexture();
+		}
+	}
+
+	public static synchronized void invalidateForAtlasClose(TextureAtlas atlas) {
+		if (previewedAtlas == atlas) {
+			generation++;
+			detachAtlasOwnedLowResolutionTexture();
+			closeLowResolutionTexture();
+		}
+	}
+
+	private static void detachAtlasOwnedLowResolutionTexture() {
+		if (!atlasOwnsLowResolutionTexture) {
+			return;
+		}
+		atlasOwnsLowResolutionTexture = false;
+		originalAtlasReleaseConfirmed = false;
+		lowResolutionTextureView = null;
+		lowResolutionTexture = null;
+	}
+
+	private static List<SpriteRegion> snapshotRegions(TextureAtlas atlas, int atlasWidth, int atlasHeight) {
+		List<SpriteRegion> regions = new ArrayList<>();
+		for (TextureAtlasSprite sprite : ((TextureAtlasAccessor) atlas).loadsOfLods$getSprites()) {
+			int width = sprite.contents().width();
+			int height = sprite.contents().height();
+			int paddingX = Math.round(sprite.getU0() * atlasWidth) - sprite.getX();
+			int paddingY = Math.round(sprite.getV0() * atlasHeight) - sprite.getY();
+			if (width <= 0 || height <= 0 || paddingX < 0 || paddingY < 0
+					|| sprite.getX() < 0 || sprite.getY() < 0
+					|| sprite.getX() + width + paddingX * 2 > atlasWidth
+					|| sprite.getY() + height + paddingY * 2 > atlasHeight) {
+				LoadsOfLods.LOGGER.warn("Skipping atlas preview sprite with invalid bounds: {}", sprite.contents().name());
+				continue;
+			}
+			regions.add(
+				new SpriteRegion(
+					sprite.contents().name(),
+					sprite.getX() + paddingX,
+					sprite.getY() + paddingY,
+					width,
+					height,
+					paddingX,
+					paddingY,
+					sprite.isAnimated()
+				)
+			);
+		}
+		return List.copyOf(regions);
+	}
+
+	private static int selectDownscaleFactor(List<SpriteRegion> regions, int atlasWidth, int atlasHeight) {
+		for (int factor = DOWNSCALE_FACTOR; factor > 1; factor >>= 1) {
+			if (atlasWidth % factor != 0 || atlasHeight % factor != 0) {
+				continue;
+			}
+			boolean aligned = true;
+			for (SpriteRegion region : regions) {
+				if (region.x() % factor != 0 || region.y() % factor != 0
+						|| region.width() % factor != 0 || region.height() % factor != 0
+						|| region.paddingX() % factor != 0 || region.paddingY() % factor != 0) {
+					aligned = false;
+					break;
+				}
+			}
+			if (aligned) {
+				return factor;
+			}
+		}
+		return 1;
+	}
+
+	private static LowAtlasImage createLowAtlas(
+		ResourceManager resourceManager,
+		List<SpriteRegion> regions,
+		int atlasWidth,
+		int atlasHeight,
+		int mipLevelCount,
+		int downscaleFactor
+	) throws IOException {
+		if (mipLevelCount <= 0) {
+			throw new IOException("The source block atlas has no mip levels");
+		}
+		int lowAtlasWidth = atlasWidth / downscaleFactor;
+		int lowAtlasHeight = atlasHeight / downscaleFactor;
+		int lowMipLevelCount = Math.max(1, mipLevelCount - Integer.numberOfTrailingZeros(downscaleFactor));
+		long imageBytes = 0;
+		for (int level = 0; level < lowMipLevelCount; level++) {
+			imageBytes += (long) Math.max(1, lowAtlasWidth >> level) * Math.max(1, lowAtlasHeight >> level) * 4;
+		}
+		if (imageBytes > MAX_PREVIEW_BYTES) {
+			throw new IOException(
+				"Low-resolution block atlas is " + lowAtlasWidth + "x" + lowAtlasHeight
+					+ " with " + lowMipLevelCount + " mip levels, exceeding the 1 GiB safety limit"
+			);
+		}
+		List<NativeImage> mipLevels = new ArrayList<>(lowMipLevelCount);
+		List<AnimatedSpriteData> animatedSpriteData = new ArrayList<>();
+		long[] totalImageBytes = {imageBytes};
+		try {
+			NativeImage atlas = new NativeImage(lowAtlasWidth, lowAtlasHeight, true);
+			mipLevels.add(atlas);
+			List<SpriteRegion> lowRegions = regions.stream()
+				.map(region -> scaleRegion(region, downscaleFactor))
+				.toList();
+			int loadedSprites = 0;
+			int skippedSprites = 0;
+			int animatedSprites = 0;
+			int animatedSpritesCached = 0;
+			for (SpriteRegion region : regions) {
+				if (region.animated()) {
+					animatedSprites++;
+				}
+				try {
+					Identifier textureId = Identifier.fromNamespaceAndPath(
+						region.identifier().getNamespace(),
+						"textures/" + region.identifier().getPath() + ".png"
+					);
+					Resource resource = resourceManager.getResource(textureId)
+						.orElseThrow(() -> new IOException("Missing texture resource " + textureId));
+					BufferedImage source;
+					try (InputStream input = resource.open()) {
+						source = ImageIO.read(input);
+					}
+					if (source == null) {
+						throw new IOException("Texture resource is not a readable image");
+					}
+					try {
+						if (source.getWidth() < region.width() || source.getHeight() < region.height()) {
+							throw new IOException("Texture dimensions do not match stitched sprite bounds");
+						}
+						writeSprite(
+							atlas,
+							source,
+							region,
+							downscaleFactor
+						);
+						if (isTiledPortalTexture(region)) {
+							SpriteRegion lowRegion = scaleRegion(region, downscaleFactor);
+							makeSpriteEdgesContinuous(
+								atlas,
+								lowRegion.x(),
+								lowRegion.y(),
+								lowRegion.width(),
+								lowRegion.height(),
+								lowRegion.paddingX(),
+								lowRegion.paddingY()
+							);
+						}
+						if (region.animated()) {
+							AnimatedSpriteData animation = createAnimatedSpriteData(
+								resource,
+								source,
+								region,
+								downscaleFactor,
+								lowMipLevelCount,
+								totalImageBytes
+							);
+							if (animation != null) {
+								animatedSpriteData.add(animation);
+								animatedSpritesCached++;
+							}
+						}
+					} finally {
+						source.flush();
+					}
+					loadedSprites++;
+				} catch (IOException | RuntimeException exception) {
+					skippedSprites++;
+					LoadsOfLods.LOGGER.warn(
+						"Leaving atlas preview sprite {} unchanged because its source could not be read: {}",
+						region.identifier(),
+						exception.getMessage()
+					);
+				}
+			}
+			for (int level = 1; level < lowMipLevelCount; level++) {
+				mipLevels.add(createMipLevel(mipLevels.get(level - 1), lowRegions, level));
+			}
+			LoadsOfLods.LOGGER.info(
+				"Built low-resolution albedo atlas preview: {}x{}, scale 1:{}, {} sprites, {} skipped, {}/{} animated sprites synchronized, {} mip levels; PBR maps are unchanged",
+				lowAtlasWidth,
+				lowAtlasHeight,
+				downscaleFactor,
+				loadedSprites,
+				skippedSprites,
+				animatedSpritesCached,
+				animatedSprites,
+				lowMipLevelCount
+			);
+			return new LowAtlasImage(
+				mipLevels,
+				downscaleFactor,
+				animatedSpriteData
+			);
+		} catch (RuntimeException | Error exception) {
+			for (NativeImage mipLevel : mipLevels) {
+				mipLevel.close();
+			}
+			closeAnimatedSprites(animatedSpriteData);
+			throw exception;
+		}
+	}
+
+	private static AnimatedSpriteData createAnimatedSpriteData(
+		Resource resource,
+		BufferedImage source,
+		SpriteRegion region,
+		int downscaleFactor,
+		int mipLevelCount,
+		long[] totalImageBytes
+	) throws IOException {
+		long initialImageBytes = totalImageBytes[0];
+		AnimationMetadataSection metadata = resource.metadata()
+			.getSection(AnimationMetadataSection.TYPE)
+			.orElse(null);
+		if (metadata == null) {
+			LoadsOfLods.LOGGER.warn("Animated sprite {} has no animation metadata; leaving its low atlas frame static", region.identifier());
+			return null;
+		}
+		FrameSize frameSize = metadata.calculateFrameSize(source.getWidth(), source.getHeight());
+		int frameWidth = frameSize.width();
+		int frameHeight = frameSize.height();
+		if (frameWidth <= 0 || frameHeight <= 0
+				|| frameWidth != region.width() || frameHeight != region.height()
+				|| source.getWidth() % frameWidth != 0 || source.getHeight() % frameHeight != 0) {
+			throw new IOException("Animation frame dimensions do not match the stitched sprite");
+		}
+		int columns = source.getWidth() / frameWidth;
+		int frameCount = columns * (source.getHeight() / frameHeight);
+		List<AnimationFrame> sourceFrames = metadata.frames().orElseGet(() -> {
+			List<AnimationFrame> frames = new ArrayList<>(frameCount);
+			for (int index = 0; index < frameCount; index++) {
+				frames.add(new AnimationFrame(index));
+			}
+			return frames;
+		});
+		if (sourceFrames.isEmpty()) {
+			throw new IOException("Animation contains no frames");
+		}
+		List<AnimationStep> steps = new ArrayList<>(sourceFrames.size());
+		Map<Integer, List<NativeImage>> imagesByFrame = new HashMap<>();
+		try {
+			for (AnimationFrame frame : sourceFrames) {
+				int frameIndex = frame.index();
+				int duration = frame.timeOr(metadata.defaultFrameTime());
+				if (frameIndex < 0 || frameIndex >= frameCount || duration <= 0) {
+					throw new IOException("Animation contains an invalid frame index or duration");
+				}
+				steps.add(new AnimationStep(frameIndex, duration));
+				if (!imagesByFrame.containsKey(frameIndex)) {
+					int frameX = frameIndex % columns * frameWidth;
+					int frameY = frameIndex / columns * frameHeight;
+					imagesByFrame.put(
+						frameIndex,
+						createAnimationFrameMipLevels(
+							source,
+							frameX,
+							frameY,
+							frameWidth,
+							frameHeight,
+							region,
+							downscaleFactor,
+							mipLevelCount,
+							totalImageBytes
+						)
+					);
+				}
+			}
+			return new AnimatedSpriteData(region, steps, imagesByFrame, metadata.interpolatedFrames());
+		} catch (IOException | RuntimeException | Error exception) {
+			closeFrameImages(imagesByFrame);
+			totalImageBytes[0] = initialImageBytes;
+			throw exception;
+		}
+	}
+
+	private static List<NativeImage> createAnimationFrameMipLevels(
+		BufferedImage source,
+		int frameX,
+		int frameY,
+		int frameWidth,
+		int frameHeight,
+		SpriteRegion region,
+		int downscaleFactor,
+		int mipLevelCount,
+		long[] totalImageBytes
+	) throws IOException {
+		List<NativeImage> mipLevels = new ArrayList<>(mipLevelCount);
+		int sourceLeft = (region.x() - region.paddingX()) / downscaleFactor;
+		int sourceTop = (region.y() - region.paddingY()) / downscaleFactor;
+		int sourceRight = (region.x() + region.width() + region.paddingX()) / downscaleFactor;
+		int sourceBottom = (region.y() + region.height() + region.paddingY()) / downscaleFactor;
+		try {
+			for (int level = 0; level < mipLevelCount; level++) {
+				int divisor = 1 << level;
+				int left = sourceLeft >> level;
+				int top = sourceTop >> level;
+				int right = ceilDiv(sourceRight, divisor);
+				int bottom = ceilDiv(sourceBottom, divisor);
+				int width = right - left;
+				int height = bottom - top;
+				long levelBytes = (long) width * height * 4;
+				totalImageBytes[0] += levelBytes;
+				if (totalImageBytes[0] > MAX_PREVIEW_BYTES) {
+					throw new IOException("Animated low-atlas frames would exceed the 1 GiB CPU image safety limit");
+				}
+				NativeImage mipLevel = new NativeImage(width, height, true);
+				mipLevels.add(mipLevel);
+				int sampleScale = downscaleFactor * divisor;
+				for (int y = top; y < bottom; y++) {
+					int relativeY = (y * divisor - sourceTop) * downscaleFactor;
+					int sampleY = frameY + relativeY;
+					for (int x = left; x < right; x++) {
+						int relativeX = (x * divisor - sourceLeft) * downscaleFactor;
+						int sampleX = frameX + relativeX;
+						mipLevel.setPixel(
+							x - left,
+							y - top,
+							averageFramePixels(source, sampleX, sampleY, frameX, frameY, frameWidth, frameHeight, sampleScale)
+						);
+					}
+				}
+				if (isTiledPortalTexture(region)) {
+					SpriteRegion lowRegion = scaleRegion(region, downscaleFactor);
+					int lowPaddingX = lowRegion.paddingX() >> level;
+					int lowPaddingY = lowRegion.paddingY() >> level;
+					makeSpriteEdgesContinuous(
+						mipLevel,
+						lowPaddingX,
+						lowPaddingY,
+						Math.max(1, ceilDiv(lowRegion.width(), divisor)),
+						Math.max(1, ceilDiv(lowRegion.height(), divisor)),
+						lowPaddingX,
+						lowPaddingY
+					);
+				}
+			}
+			return mipLevels;
+		} catch (IOException | RuntimeException | Error exception) {
+			for (NativeImage mipLevel : mipLevels) {
+				mipLevel.close();
+			}
+			throw exception;
+		}
+	}
+
+	private static int averageFramePixels(
+		BufferedImage source,
+		int x,
+		int y,
+		int frameX,
+		int frameY,
+		int frameWidth,
+		int frameHeight,
+		int scale
+	) {
+		long alphaSum = 0;
+		long redSum = 0;
+		long greenSum = 0;
+		long blueSum = 0;
+		int sampleCount = scale * scale;
+		for (int offsetY = 0; offsetY < scale; offsetY++) {
+			int sourceY = Math.clamp(y + offsetY, frameY, frameY + frameHeight - 1);
+			for (int offsetX = 0; offsetX < scale; offsetX++) {
+				int sourceX = Math.clamp(x + offsetX, frameX, frameX + frameWidth - 1);
+				int color = source.getRGB(sourceX, sourceY);
+				int alpha = color >>> 24;
+				alphaSum += alpha;
+				redSum += (long) ((color >>> 16) & 255) * alpha;
+				greenSum += (long) ((color >>> 8) & 255) * alpha;
+				blueSum += (long) (color & 255) * alpha;
+			}
+		}
+		if (alphaSum == 0) {
+			return 0;
+		}
+		int alpha = (int) ((alphaSum + sampleCount / 2) / sampleCount);
+		int red = (int) ((redSum + alphaSum / 2) / alphaSum);
+		int green = (int) ((greenSum + alphaSum / 2) / alphaSum);
+		int blue = (int) ((blueSum + alphaSum / 2) / alphaSum);
+		return (alpha << 24) | (red << 16) | (green << 8) | blue;
+	}
+
+	private static SpriteRegion scaleRegion(SpriteRegion region, int factor) {
+		return new SpriteRegion(
+			region.identifier(),
+			region.x() / factor,
+			region.y() / factor,
+			region.width() / factor,
+			region.height() / factor,
+			region.paddingX() / factor,
+			region.paddingY() / factor,
+			region.animated()
+		);
+	}
+
+	private static void createLowResolutionTexture(
+		TextureAtlas atlas,
+		GpuTexture highResolutionTexture,
+		LowAtlasImage image,
+		List<SpriteRegion> regions,
+		boolean releaseHighResolutionAtlas
+	) {
+		var device = RenderSystem.getDevice();
+		closeVirtualTextureGpuPageTable();
+		GpuTexture texture = device.createTexture(
+			"Loads of Lods low-resolution block atlas",
+			GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING
+				| GpuTexture.USAGE_RENDER_ATTACHMENT,
+			highResolutionTexture.getFormat(),
+			highResolutionTexture.getWidth(0) / image.downscaleFactor(),
+			highResolutionTexture.getHeight(0) / image.downscaleFactor(),
+			highResolutionTexture.getDepthOrLayers(),
+			image.mipLevels().size()
+		);
+		GpuTextureView textureView = null;
+		VirtualTextureGpuPageTable pageTable = null;
+		VirtualTextureGpuCache tileCache = null;
+		VirtualTextureMetadataTexture metadataTexture = null;
+		boolean initialized = false;
+		try {
+			textureView = device.createTextureView(texture);
+			var encoder = device.createCommandEncoder();
+			for (int level = 0; level < image.mipLevels().size(); level++) {
+				encoder.writeToTexture(texture, image.mipLevels().get(level), level, 0, 0, 0);
+			}
+			encoder.submit();
+			pageTable = new VirtualTextureGpuPageTable(
+				highResolutionTexture.getWidth(0),
+				highResolutionTexture.getHeight(0),
+				VIRTUAL_TILE_SIZE,
+				highResolutionTexture.getMipLevels(),
+				generation
+			);
+			int cacheMipLevels = Math.min(
+				Integer.numberOfTrailingZeros(VIRTUAL_TILE_SIZE) + 1,
+				pageTable.layout().mipLevelCount()
+			);
+			long configuredBudgetBytes = Math.multiplyExact(
+				LoadsOfLodsClient.getConfig().highResolutionCacheMiB(),
+				1024L * 1024
+			);
+			long atlasBudgetBytes = estimateTextureBytes(
+				highResolutionTexture.getWidth(0),
+				highResolutionTexture.getHeight(0),
+				highResolutionTexture.getMipLevels()
+			) / 4;
+			long minimumCacheBytes = 0;
+			for (int mip = 0; mip < cacheMipLevels; mip++) {
+				long mipSize = Math.max(1, VIRTUAL_TILE_SIZE >> mip);
+				minimumCacheBytes = Math.addExact(minimumCacheBytes, mipSize * mipSize * 4);
+			}
+			long cacheBudgetBytes = Math.max(
+				minimumCacheBytes,
+				Math.min(configuredBudgetBytes, atlasBudgetBytes)
+			);
+			tileCache = new VirtualTextureGpuCache(
+				pageTable,
+				VIRTUAL_TILE_SIZE,
+				cacheMipLevels,
+				cacheBudgetBytes
+			);
+			metadataTexture = createVirtualTextureMetadata(
+				highResolutionTexture.getWidth(0),
+				highResolutionTexture.getHeight(0),
+				highResolutionTexture.getMipLevels()
+			);
+			VirtualTextureTileBuilder tileBuilder = createVirtualTextureTileBuilder(
+				atlas,
+				regions,
+				highResolutionTexture.getWidth(0),
+				highResolutionTexture.getHeight(0),
+				highResolutionTexture.getMipLevels(),
+				generation
+			);
+			lowResolutionTexture = texture;
+			lowResolutionTextureView = textureView;
+			virtualTextureGpuPageTable = pageTable;
+			virtualTextureTileBuilder = tileBuilder;
+			virtualTextureGpuCache = tileCache;
+			virtualTextureMetadataTexture = metadataTexture;
+			virtualTextureLayout = new VirtualTextureLayout(
+				highResolutionTexture.getWidth(0),
+				highResolutionTexture.getHeight(0),
+				VIRTUAL_TILE_SIZE,
+				0
+			);
+			previewedAtlas = atlas;
+			lowAtlasDownscaleFactor = image.downscaleFactor();
+			animatedSprites = image.transferAnimatedSprites();
+			animatedStateMismatchLogged = false;
+			if (releaseHighResolutionAtlas) {
+				replaceBlockAtlasWithLowResolution(atlas, highResolutionTexture, texture, textureView);
+			}
+			initialized = true;
+		} finally {
+			if (!initialized) {
+				if (textureView != null) {
+					textureView.close();
+				}
+				if (tileCache != null) {
+					tileCache.close();
+				}
+				closeVirtualTextureMetadata(metadataTexture);
+				if (pageTable != null) {
+					pageTable.close();
+				}
+				texture.close();
+			}
+		}
+	}
+
+	public static void updateAnimatedFrames(TextureAtlas atlas) {
+		if (previewedAtlas != atlas || lowResolutionTexture == null || animatedSprites.isEmpty()) {
+			return;
+		}
+		TextureAtlasAccessor atlasAccessor = (TextureAtlasAccessor) atlas;
+		List<SpriteContents.AnimationState> states = atlasAccessor.loadsOfLods$getAnimatedTextureStates();
+		Map<Identifier, AnimatedSpriteData> animationsById = new HashMap<>();
+		for (AnimatedSpriteData animation : animatedSprites) {
+			animationsById.put(animation.region().identifier(), animation);
+		}
+		List<PendingAnimationUpdate> updates = new ArrayList<>();
+		List<NativeImage> temporaryImages = new ArrayList<>();
+		int stateIndex = 0;
+		try {
+			for (TextureAtlasSprite sprite : atlasAccessor.loadsOfLods$getSprites()) {
+				if (!sprite.isAnimated()) {
+					continue;
+				}
+				if (stateIndex >= states.size()) {
+					logAnimationStateMismatch(atlas, "fewer animation states than animated sprites");
+					return;
+				}
+				SpriteContents.AnimationState state = states.get(stateIndex++);
+				AnimatedSpriteData animation = animationsById.get(sprite.contents().name());
+				if (animation == null) {
+					continue;
+				}
+				SpriteAnimationStateAccessor stateAccessor = (SpriteAnimationStateAccessor) state;
+				int framePosition = stateAccessor.loadsOfLods$getFrame();
+				int subFrame = stateAccessor.loadsOfLods$getSubFrame();
+				if (framePosition < 0 || framePosition >= animation.steps().size()) {
+					logAnimationStateMismatch(atlas, "animation frame index outside cached frame sequence for " + sprite.contents().name());
+					return;
+				}
+				if (animation.lastFramePosition == framePosition
+						&& (!animation.interpolated() || animation.lastSubFrame == subFrame)) {
+					continue;
+				}
+				AnimationStep step = animation.steps().get(framePosition);
+				List<NativeImage> frameImages = animation.imagesByFrame().get(step.frameIndex());
+				if (frameImages == null) {
+					logAnimationStateMismatch(atlas, "missing cached frame " + step.frameIndex() + " for " + sprite.contents().name());
+					continue;
+				}
+				if (animation.interpolated() && subFrame > 0) {
+					int nextPosition = (framePosition + 1) % animation.steps().size();
+					int nextFrameIndex = animation.steps().get(nextPosition).frameIndex();
+					List<NativeImage> nextImages = animation.imagesByFrame().get(nextFrameIndex);
+					if (nextImages == null) {
+						logAnimationStateMismatch(atlas, "missing interpolation frame " + nextFrameIndex + " for " + sprite.contents().name());
+						continue;
+					}
+					float blendWeight = Math.min(1.0F, subFrame / (float) step.duration());
+					frameImages = blendMipLevels(frameImages, nextImages, blendWeight);
+					temporaryImages.addAll(frameImages);
+				}
+				updates.add(new PendingAnimationUpdate(animation, frameImages, framePosition, subFrame));
+			}
+			if (stateIndex != states.size()) {
+				logAnimationStateMismatch(atlas, "more animation states than animated sprites");
+				return;
+			}
+			if (updates.isEmpty()) {
+				return;
+			}
+			var encoder = RenderSystem.getDevice().createCommandEncoder();
+			for (PendingAnimationUpdate update : updates) {
+				int sourceLeft = (update.animation().region().x() - update.animation().region().paddingX())
+					/ lowAtlasDownscaleFactor;
+				int sourceTop = (update.animation().region().y() - update.animation().region().paddingY())
+					/ lowAtlasDownscaleFactor;
+				for (int level = 0; level < update.mipLevels().size(); level++) {
+					encoder.writeToTexture(
+						lowResolutionTexture,
+						update.mipLevels().get(level),
+						level,
+						0,
+						sourceLeft >> level,
+						sourceTop >> level
+					);
+				}
+			}
+			encoder.submit();
+			for (PendingAnimationUpdate update : updates) {
+				update.animation().lastFramePosition = update.framePosition();
+				update.animation().lastSubFrame = update.subFrame();
+			}
+		} finally {
+			closeImages(temporaryImages);
+		}
+	}
+
+	private static List<NativeImage> blendMipLevels(
+		List<NativeImage> current,
+		List<NativeImage> next,
+		float nextWeight
+	) {
+		if (current.size() != next.size()) {
+			throw new IllegalStateException("Animated frame mip chains have different lengths");
+		}
+		List<NativeImage> blended = new ArrayList<>(current.size());
+		try {
+			for (int level = 0; level < current.size(); level++) {
+				NativeImage currentLevel = current.get(level);
+				NativeImage nextLevel = next.get(level);
+				if (currentLevel.getWidth() != nextLevel.getWidth()
+						|| currentLevel.getHeight() != nextLevel.getHeight()) {
+					throw new IllegalStateException("Animated frame mip images have different dimensions");
+				}
+				NativeImage result = new NativeImage(currentLevel.getWidth(), currentLevel.getHeight(), true);
+				blended.add(result);
+				for (int y = 0; y < result.getHeight(); y++) {
+					for (int x = 0; x < result.getWidth(); x++) {
+						result.setPixel(x, y, blendColors(
+							currentLevel.getPixel(x, y),
+							nextLevel.getPixel(x, y),
+							nextWeight
+						));
+					}
+				}
+			}
+			return blended;
+		} catch (RuntimeException | Error exception) {
+			closeImages(blended);
+			throw exception;
+		}
+	}
+
+	private static int blendColors(int current, int next, float nextWeight) {
+		float currentWeight = 1.0F - nextWeight;
+		int alpha = Math.round((current >>> 24) * currentWeight + (next >>> 24) * nextWeight);
+		int red = Math.round(((current >>> 16) & 255) * currentWeight + ((next >>> 16) & 255) * nextWeight);
+		int green = Math.round(((current >>> 8) & 255) * currentWeight + ((next >>> 8) & 255) * nextWeight);
+		int blue = Math.round((current & 255) * currentWeight + (next & 255) * nextWeight);
+		return (alpha << 24) | (red << 16) | (green << 8) | blue;
+	}
+
+	private static void logAnimationStateMismatch(TextureAtlas atlas, String reason) {
+		if (!animatedStateMismatchLogged) {
+			LoadsOfLods.LOGGER.error("Could not synchronize low-atlas animations for {}: {}", atlas.location(), reason);
+			animatedStateMismatchLogged = true;
+		}
+	}
+
+	private static void closeAnimatedSprites(List<AnimatedSpriteData> animations) {
+		for (AnimatedSpriteData animation : animations) {
+			closeFrameImages(animation.imagesByFrame());
+		}
+	}
+
+	private static void closeFrameImages(Map<Integer, List<NativeImage>> imagesByFrame) {
+		for (List<NativeImage> mipLevels : imagesByFrame.values()) {
+			closeImages(mipLevels);
+		}
+	}
+
+	private static void closeImages(List<NativeImage> images) {
+		for (NativeImage image : images) {
+			image.close();
+		}
+	}
+
+	private static void closeLowResolutionTexture() {
+		lowPreviewEnabled = false;
+		distancePreviewEnabled = false;
+		previewedAtlas = null;
+		virtualTextureLayout = null;
+		VIRTUAL_TEXTURE_REQUEST_TRACKER.clear();
+		pendingVirtualTextureQuads.clear();
+		pendingVirtualTextureTiles.clear();
+		animatedVirtualTextureTiles.clear();
+		activeVirtualTextureCursor = null;
+		activeVirtualTextureDistanceSquared = Double.POSITIVE_INFINITY;
+		closeVirtualTextureGpuPageTable();
+		closeAnimatedSprites(animatedSprites);
+		animatedSprites = List.of();
+		lowAtlasDownscaleFactor = 1;
+		animatedStateMismatchLogged = false;
+		GpuTextureView textureView = lowResolutionTextureView;
+		GpuTexture texture = lowResolutionTexture;
+		lowResolutionTextureView = null;
+		lowResolutionTexture = null;
+		boolean atlasOwnsTexture = atlasOwnsLowResolutionTexture;
+		atlasOwnsLowResolutionTexture = false;
+		if (!atlasOwnsTexture && textureView != null) {
+			textureView.close();
+		}
+		if (!atlasOwnsTexture && texture != null) {
+			texture.close();
+		}
+		VirtualTextureMetadataTexture metadata = virtualTextureMetadataTexture;
+		virtualTextureMetadataTexture = null;
+		closeVirtualTextureMetadata(metadata);
+	}
+
+	private static void closeVirtualTextureGpuPageTable() {
+		VirtualTextureGpuCache cache = virtualTextureGpuCache;
+		virtualTextureGpuCache = null;
+		if (cache != null) {
+			cache.close();
+		}
+		virtualTextureTileBuilder = null;
+		VirtualTextureGpuPageTable pageTable = virtualTextureGpuPageTable;
+		virtualTextureGpuPageTable = null;
+		if (pageTable != null) {
+			pageTable.close();
+		}
+		VirtualTextureMetadataTexture metadata = virtualTextureMetadataTexture;
+		virtualTextureMetadataTexture = null;
+		closeVirtualTextureMetadata(metadata);
+	}
+
+	private static void ensureFallbackVirtualTextureResources() {
+		if (fallbackPageTable != null && fallbackTileCache != null) {
+			return;
+		}
+		VirtualTextureGpuPageTable pageTable = new VirtualTextureGpuPageTable(1, 1, VIRTUAL_TILE_SIZE, 1, 0);
+		VirtualTextureGpuCache cache = null;
+		VirtualTextureMetadataTexture metadata = null;
+		try {
+			cache = new VirtualTextureGpuCache(
+				pageTable,
+				VIRTUAL_TILE_SIZE,
+				1,
+				(long) VIRTUAL_TILE_SIZE * VIRTUAL_TILE_SIZE * 4
+			);
+			metadata = createVirtualTextureMetadata(1, 1, 1);
+			fallbackPageTable = pageTable;
+			fallbackTileCache = cache;
+			fallbackMetadataTexture = metadata;
+		} catch (RuntimeException | Error exception) {
+			if (metadata != null) {
+				closeVirtualTextureMetadata(metadata);
+			}
+			if (cache != null) {
+				cache.close();
+			}
+			pageTable.close();
+			throw exception;
+		}
+	}
+
+	private static VirtualTextureMetadataTexture createVirtualTextureMetadata(
+		int atlasWidth,
+		int atlasHeight,
+		int mipLevelCount
+	) {
+		if (atlasWidth <= 0 || atlasWidth > 65535 || atlasHeight <= 0 || atlasHeight > 65535
+				|| mipLevelCount <= 0 || mipLevelCount > 255) {
+			throw new IllegalArgumentException("Virtual texture metadata is outside its supported range");
+		}
+		var device = RenderSystem.getDevice();
+		GpuTexture texture = device.createTexture(
+			"Loads of Lods virtual atlas dimensions",
+			GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_TEXTURE_BINDING,
+			GpuFormat.RGBA8_UNORM,
+			2,
+			1,
+			1,
+			1
+		);
+		GpuTextureView view = null;
+		boolean initialized = false;
+		try {
+			view = device.createTextureView(texture);
+			NativeImage image = new NativeImage(2, 1, true);
+			try (image) {
+				int red = atlasWidth & 0xFF;
+				int green = atlasWidth >>> 8;
+				int blue = atlasHeight & 0xFF;
+				int alpha = atlasHeight >>> 8;
+				image.setPixel(0, 0, (alpha << 24) | (blue << 16) | (green << 8) | red);
+				image.setPixel(1, 0, mipLevelCount << 16);
+				var encoder = device.createCommandEncoder();
+				encoder.writeToTexture(texture, image);
+				encoder.submit();
+			}
+			initialized = true;
+			return new VirtualTextureMetadataTexture(texture, view);
+		} finally {
+			if (!initialized) {
+				if (view != null) {
+					view.close();
+				}
+				texture.close();
+			}
+		}
+	}
+
+	private static void closeVirtualTextureMetadata(VirtualTextureMetadataTexture metadata) {
+		if (metadata == null) {
+			return;
+		}
+		metadata.view().close();
+		metadata.texture().close();
+	}
+
+	private static long estimateTextureBytes(int width, int height, int mipLevelCount) {
+		long bytes = 0;
+		for (int mip = 0; mip < mipLevelCount; mip++) {
+			bytes = Math.addExact(
+				bytes,
+				Math.multiplyExact(
+					Math.multiplyExact((long) Math.max(1, width >> mip), Math.max(1, height >> mip)),
+					4L
+				)
+			);
+		}
+		return bytes;
+	}
+
+	private static void replaceBlockAtlasWithLowResolution(
+		TextureAtlas atlas,
+		GpuTexture highResolutionTexture,
+		GpuTexture lowResolutionTexture,
+		GpuTextureView lowResolutionTextureView
+	) {
+		TextureAtlasAccessor atlasAccessor = (TextureAtlasAccessor) atlas;
+		AbstractTextureAccessor textureAccessor = (AbstractTextureAccessor) atlas;
+		int originalWidth = highResolutionTexture.getWidth(0);
+		int originalHeight = highResolutionTexture.getHeight(0);
+		originalAtlasReleaseConfirmed = false;
+		GpuTextureView[] oldMipViews = atlasAccessor.loadsOfLods$getMipViews();
+		GpuTextureView oldTextureView = textureAccessor.loadsOfLods$getTextureView();
+		atlasAccessor.loadsOfLods$setMipViews(new GpuTextureView[0]);
+		textureAccessor.loadsOfLods$setTexture(lowResolutionTexture);
+		textureAccessor.loadsOfLods$setTextureView(lowResolutionTextureView);
+		atlasOwnsLowResolutionTexture = true;
+
+		for (GpuTextureView mipView : oldMipViews) {
+			if (mipView != null && mipView != oldTextureView) {
+				closeReleasedAtlasView(mipView);
+			}
+		}
+		if (oldTextureView != null && oldTextureView != lowResolutionTextureView) {
+			closeReleasedAtlasView(oldTextureView);
+		}
+		boolean originalTextureReleased = false;
+		if (highResolutionTexture != null && highResolutionTexture != lowResolutionTexture) {
+			try {
+				highResolutionTexture.close();
+				originalTextureReleased = true;
+				originalAtlasReleaseConfirmed = true;
+			} catch (RuntimeException exception) {
+				LoadsOfLods.LOGGER.error("Could not release the original high-resolution block atlas allocation", exception);
+			}
+		}
+		if (originalTextureReleased) {
+			LoadsOfLods.LOGGER.info(
+				"Released the original {}x{} block atlas GPU allocation; streamed terrain uses the {}x{} fallback atlas",
+				originalWidth,
+				originalHeight,
+				lowResolutionTexture.getWidth(0),
+				lowResolutionTexture.getHeight(0)
+			);
+		} else {
+			originalAtlasReleaseConfirmed = false;
+			LoadsOfLods.LOGGER.error(
+				"Streamed mode is active, but the original {}x{} block atlas allocation could not be confirmed as released",
+				originalWidth,
+				originalHeight
+			);
+		}
+	}
+
+	private static void closeReleasedAtlasView(GpuTextureView view) {
+		try {
+			view.close();
+		} catch (RuntimeException exception) {
+			LoadsOfLods.LOGGER.error("Could not release an original block-atlas mip view", exception);
+		}
+	}
+
+	private static VirtualTextureTileBuilder createVirtualTextureTileBuilder(
+		TextureAtlas atlas,
+		List<SpriteRegion> regions,
+		int atlasWidth,
+		int atlasHeight,
+		int mipLevelCount,
+		long atlasGeneration
+	) {
+		Map<Identifier, SpriteRegion> regionsById = new HashMap<>();
+		for (SpriteRegion region : regions) {
+			regionsById.put(region.identifier(), region);
+		}
+		List<SpriteSource> sources = new ArrayList<>();
+		for (TextureAtlasSprite sprite : ((TextureAtlasAccessor) atlas).loadsOfLods$getSprites()) {
+			SpriteRegion region = regionsById.get(sprite.contents().name());
+			if (region == null) {
+				continue;
+			}
+			List<MipImage> mipImages = new ArrayList<>();
+			if (!region.animated()) {
+				NativeImage[] images = ((SpriteContentsAccessor) sprite.contents()).loadsOfLods$getMipImages();
+				for (NativeImage image : images) {
+					mipImages.add(new MipImage() {
+						@Override
+						public int width() {
+							return image.getWidth();
+						}
+
+						@Override
+						public int height() {
+							return image.getHeight();
+						}
+
+						@Override
+						public int pixel(int x, int y) {
+							return image.getPixel(x, y);
+						}
+					});
+				}
+			}
+			sources.add(new SpriteSource(
+				region.identifier().toString(),
+				region.x(),
+				region.y(),
+				region.width(),
+				region.height(),
+				region.paddingX(),
+				region.paddingY(),
+				region.animated(),
+				mipImages
+			));
+		}
+		return new VirtualTextureTileBuilder(
+			atlasWidth,
+			atlasHeight,
+			VIRTUAL_TILE_SIZE,
+			mipLevelCount,
+			atlasGeneration,
+			sources
+		);
+	}
+
+	private static int averageSourcePixels(
+		BufferedImage source,
+		int x,
+		int y,
+		int spriteWidth,
+		int spriteHeight,
+		int factor
+	) {
+		long alphaSum = 0;
+		long redSum = 0;
+		long greenSum = 0;
+		long blueSum = 0;
+		int sampleCount = 0;
+		for (int sampleY = 0; sampleY < factor; sampleY++) {
+			int sourceY = Math.clamp(y + sampleY, 0, Math.min(source.getHeight(), spriteHeight) - 1);
+			for (int sampleX = 0; sampleX < factor; sampleX++) {
+				int sourceX = Math.clamp(x + sampleX, 0, Math.min(source.getWidth(), spriteWidth) - 1);
+				int color = source.getRGB(sourceX, sourceY);
+				int alpha = color >>> 24;
+				alphaSum += alpha;
+				redSum += (long) ((color >>> 16) & 255) * alpha;
+				greenSum += (long) ((color >>> 8) & 255) * alpha;
+				blueSum += (long) (color & 255) * alpha;
+				sampleCount++;
+			}
+		}
+		if (alphaSum == 0) {
+			return 0;
+		}
+		int alpha = (int) ((alphaSum + sampleCount / 2) / sampleCount);
+		int red = (int) ((redSum + alphaSum / 2) / alphaSum);
+		int green = (int) ((greenSum + alphaSum / 2) / alphaSum);
+		int blue = (int) ((blueSum + alphaSum / 2) / alphaSum);
+		return (alpha << 24) | (red << 16) | (green << 8) | blue;
+	}
+
+	private static NativeImage createMipLevel(NativeImage previous, List<SpriteRegion> regions, int level) {
+		int width = Math.max(1, previous.getWidth() >> 1);
+		int height = Math.max(1, previous.getHeight() >> 1);
+		NativeImage mipLevel = new NativeImage(width, height, true);
+		try {
+			int previousLevel = level - 1;
+			for (SpriteRegion region : regions) {
+				int sourceLeft = Math.max(0, (region.x() - region.paddingX()) >> previousLevel);
+				int sourceTop = Math.max(0, (region.y() - region.paddingY()) >> previousLevel);
+				int sourceRight = Math.min(
+					previous.getWidth(),
+					ceilDiv(region.x() + region.width() + region.paddingX(), 1 << previousLevel)
+				);
+				int sourceBottom = Math.min(
+					previous.getHeight(),
+					ceilDiv(region.y() + region.height() + region.paddingY(), 1 << previousLevel)
+				);
+				int targetLeft = sourceLeft >> 1;
+				int targetTop = sourceTop >> 1;
+				int targetRight = Math.min(width, ceilDiv(sourceRight, 2));
+				int targetBottom = Math.min(height, ceilDiv(sourceBottom, 2));
+				for (int y = targetTop; y < targetBottom; y++) {
+					for (int x = targetLeft; x < targetRight; x++) {
+						int x0 = Math.clamp(x * 2, sourceLeft, sourceRight - 1);
+						int x1 = Math.clamp(x * 2 + 1, sourceLeft, sourceRight - 1);
+						int y0 = Math.clamp(y * 2, sourceTop, sourceBottom - 1);
+						int y1 = Math.clamp(y * 2 + 1, sourceTop, sourceBottom - 1);
+						mipLevel.setPixel(x, y, averagePixels(
+							previous.getPixel(x0, y0),
+							previous.getPixel(x1, y0),
+							previous.getPixel(x0, y1),
+							previous.getPixel(x1, y1)
+						));
+					}
+				}
+				if (isTiledPortalTexture(region)) {
+					int divisor = 1 << level;
+					makeSpriteEdgesContinuous(
+						mipLevel,
+						region.x() >> level,
+						region.y() >> level,
+						Math.max(1, ceilDiv(region.width(), divisor)),
+						Math.max(1, ceilDiv(region.height(), divisor)),
+						region.paddingX() >> level,
+						region.paddingY() >> level
+					);
+				}
+			}
+			return mipLevel;
+		} catch (RuntimeException | Error exception) {
+			mipLevel.close();
+			throw exception;
+		}
+	}
+
+	private static int averagePixels(int first, int second, int third, int fourth) {
+		int alphaSum = (first >>> 24) + (second >>> 24) + (third >>> 24) + (fourth >>> 24);
+		if (alphaSum == 0) {
+			return 0;
+		}
+		int red = (((first >>> 16) & 255) * (first >>> 24)
+			+ ((second >>> 16) & 255) * (second >>> 24)
+			+ ((third >>> 16) & 255) * (third >>> 24)
+			+ ((fourth >>> 16) & 255) * (fourth >>> 24) + alphaSum / 2) / alphaSum;
+		int green = (((first >>> 8) & 255) * (first >>> 24)
+			+ ((second >>> 8) & 255) * (second >>> 24)
+			+ ((third >>> 8) & 255) * (third >>> 24)
+			+ ((fourth >>> 8) & 255) * (fourth >>> 24) + alphaSum / 2) / alphaSum;
+		int blue = ((first & 255) * (first >>> 24)
+			+ (second & 255) * (second >>> 24)
+			+ (third & 255) * (third >>> 24)
+			+ (fourth & 255) * (fourth >>> 24) + alphaSum / 2) / alphaSum;
+		int alpha = (alphaSum + 2) / 4;
+		return (alpha << 24) | (red << 16) | (green << 8) | blue;
+	}
+
+	private static void makeSpriteEdgesContinuous(
+		NativeImage image,
+		int contentX,
+		int contentY,
+		int contentWidth,
+		int contentHeight,
+		int paddingX,
+		int paddingY
+	) {
+		if (contentWidth < 2 || contentHeight < 2) {
+			return;
+		}
+		int left = Math.max(0, contentX - paddingX);
+		int top = Math.max(0, contentY - paddingY);
+		int right = Math.min(image.getWidth(), contentX + contentWidth + paddingX);
+		int bottom = Math.min(image.getHeight(), contentY + contentHeight + paddingY);
+		int contentRight = contentX + contentWidth - 1;
+		int contentBottom = contentY + contentHeight - 1;
+		for (int y = contentY; y <= contentBottom; y++) {
+			int edge = averageTwoPixels(
+				image.getPixel(contentX, y),
+				image.getPixel(contentRight, y)
+			);
+			image.setPixel(contentX, y, edge);
+			image.setPixel(contentRight, y, edge);
+			for (int x = left; x < contentX; x++) {
+				image.setPixel(x, y, edge);
+			}
+			for (int x = contentRight + 1; x < right; x++) {
+				image.setPixel(x, y, edge);
+			}
+		}
+		for (int x = left; x < right; x++) {
+			int edge = averageTwoPixels(
+				image.getPixel(x, contentY),
+				image.getPixel(x, contentBottom)
+			);
+			image.setPixel(x, contentY, edge);
+			image.setPixel(x, contentBottom, edge);
+			for (int y = top; y < contentY; y++) {
+				image.setPixel(x, y, edge);
+			}
+			for (int y = contentBottom + 1; y < bottom; y++) {
+				image.setPixel(x, y, edge);
+			}
+		}
+	}
+
+	private static int averageTwoPixels(int first, int second) {
+		int firstAlpha = first >>> 24;
+		int secondAlpha = second >>> 24;
+		int alphaSum = firstAlpha + secondAlpha;
+		if (alphaSum == 0) {
+			return 0;
+		}
+		int red = ((((first >>> 16) & 255) * firstAlpha) + (((second >>> 16) & 255) * secondAlpha) + alphaSum / 2)
+			/ alphaSum;
+		int green = ((((first >>> 8) & 255) * firstAlpha) + (((second >>> 8) & 255) * secondAlpha) + alphaSum / 2)
+			/ alphaSum;
+		int blue = (((first & 255) * firstAlpha) + ((second & 255) * secondAlpha) + alphaSum / 2) / alphaSum;
+		int alpha = (alphaSum + 1) / 2;
+		return (alpha << 24) | (red << 16) | (green << 8) | blue;
+	}
+
+	private static int ceilDiv(int value, int divisor) {
+		return (value + divisor - 1) / divisor;
+	}
+
+	private static boolean isTiledPortalTexture(SpriteRegion region) {
+		return region.identifier().getPath().equals("block/nether_portal");
+	}
+
+	private static void writeSprite(
+		NativeImage atlas,
+		BufferedImage source,
+		SpriteRegion region,
+		int downscaleFactor
+	) {
+		int firstLowX = -region.paddingX() / downscaleFactor;
+		int lastLowX = (region.width() + region.paddingX()) / downscaleFactor - 1;
+		int firstLowY = -region.paddingY() / downscaleFactor;
+		int lastLowY = (region.height() + region.paddingY()) / downscaleFactor - 1;
+		for (int lowY = firstLowY; lowY <= lastLowY; lowY++) {
+			int relativeY = lowY * downscaleFactor;
+			int targetY = region.y() / downscaleFactor + lowY;
+			int sourceY = Math.clamp(relativeY, 0, Math.min(source.getHeight(), region.height()) - 1);
+			for (int lowX = firstLowX; lowX <= lastLowX; lowX++) {
+				int relativeX = lowX * downscaleFactor;
+				int targetX = region.x() / downscaleFactor + lowX;
+				int sourceX = Math.clamp(relativeX, 0, Math.min(source.getWidth(), region.width()) - 1);
+				int color = averageSourcePixels(source, sourceX, sourceY, region.width(), region.height(), downscaleFactor);
+				if (targetX >= 0 && targetY >= 0 && targetX < atlas.getWidth() && targetY < atlas.getHeight()) {
+					atlas.setPixel(targetX, targetY, color);
+				}
+			}
+		}
+	}
+
+	private record SpriteRegion(
+		Identifier identifier,
+		int x,
+		int y,
+		int width,
+		int height,
+		int paddingX,
+		int paddingY,
+		boolean animated
+	) {
+	}
+
+	public record VirtualTextureSamplingViews(
+		GpuTextureView tileAtlas,
+		GpuTextureView pageTable,
+		GpuTextureView atlasMetadata
+	) {
+	}
+
+	private record VirtualTextureMetadataTexture(GpuTexture texture, GpuTextureView view) {
+	}
+
+	public record VirtualTextureCacheStatus(
+		boolean available,
+		int residentTiles,
+		long usedBytes,
+		long capacityBytes,
+		int pendingTiles,
+		int pendingQuads,
+		long capturedQuads,
+		long capturedSpriteUses
+	) {
+	}
+
+	private record AnimationStep(int frameIndex, int duration) {
+	}
+
+	private static final class AnimatedSpriteData {
+		private final SpriteRegion region;
+		private final List<AnimationStep> steps;
+		private final Map<Integer, List<NativeImage>> imagesByFrame;
+		private final boolean interpolated;
+		private int lastFramePosition = -1;
+		private int lastSubFrame = -1;
+
+		private AnimatedSpriteData(
+			SpriteRegion region,
+			List<AnimationStep> steps,
+			Map<Integer, List<NativeImage>> imagesByFrame,
+			boolean interpolated
+		) {
+			this.region = region;
+			this.steps = List.copyOf(steps);
+			this.imagesByFrame = Map.copyOf(imagesByFrame);
+			this.interpolated = interpolated;
+		}
+
+		private SpriteRegion region() {
+			return region;
+		}
+
+		private List<AnimationStep> steps() {
+			return steps;
+		}
+
+		private Map<Integer, List<NativeImage>> imagesByFrame() {
+			return imagesByFrame;
+		}
+
+		private boolean interpolated() {
+			return interpolated;
+		}
+	}
+
+	private record PendingAnimationUpdate(
+		AnimatedSpriteData animation,
+		List<NativeImage> mipLevels,
+		int framePosition,
+		int subFrame
+	) {
+	}
+
+	private static final class LowAtlasImage implements AutoCloseable {
+		private final List<NativeImage> mipLevels;
+		private final int downscaleFactor;
+		private final List<AnimatedSpriteData> animatedSprites;
+		private boolean animationsTransferred;
+
+		private LowAtlasImage(
+			List<NativeImage> mipLevels,
+			int downscaleFactor,
+			List<AnimatedSpriteData> animatedSprites
+		) {
+			this.mipLevels = List.copyOf(mipLevels);
+			this.downscaleFactor = downscaleFactor;
+			this.animatedSprites = List.copyOf(animatedSprites);
+		}
+
+		private List<NativeImage> mipLevels() {
+			return mipLevels;
+		}
+
+		private int downscaleFactor() {
+			return downscaleFactor;
+		}
+
+		private List<AnimatedSpriteData> transferAnimatedSprites() {
+			animationsTransferred = true;
+			return animatedSprites;
+		}
+
+		@Override
+		public void close() {
+			closeImages(mipLevels);
+			if (!animationsTransferred) {
+				closeAnimatedSprites(animatedSprites);
+			}
+		}
+	}
+}

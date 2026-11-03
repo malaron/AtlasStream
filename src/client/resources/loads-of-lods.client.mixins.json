@@ -1,0 +1,24 @@
+{
+	"required": true,
+	"package": "com.malaron.loadsoflods.client.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"client": [
+		"AbstractTextureAccessor",
+		"AbstractTexturePreviewMixin",
+		"ChunkVertexConsumerMixin",
+		"IrisPbrAtlasLookupMixin",
+		"PipelineCacheMixin",
+		"SpriteAnimationStateAccessor",
+		"SpriteContentsAccessor",
+		"SodiumChunkBuildPriorityMixin",
+		"SodiumTerrainRenderPassMixin",
+		"SodiumVirtualTextureBindingsMixin",
+		"SodiumVirtualTextureLayoutMixin",
+		"SodiumWorldRendererMixin",
+		"TextureAtlasAccessor",
+		"TextureAtlasUploadMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

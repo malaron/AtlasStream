@@ -1,0 +1,30 @@
+{
+	"schemaVersion": 1,
+	"id": "loads-of-lods",
+	"version": "${version}",
+	"name": "Loads of Lods",
+	"description": "A client-side texture LOD prototype for large resource packs.",
+	"license": "CC0-1.0",
+	"icon": "assets/loads-of-lods/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.malaron.loadsoflods.LoadsOfLods"
+		],
+		"client": [
+			"com.malaron.loadsoflods.client.LoadsOfLodsClient"
+		]
+	},
+	"mixins": [
+		{
+			"config": "loads-of-lods.client.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
