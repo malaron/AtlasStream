@@ -64,6 +64,15 @@ final class IrisPbrAtlasReducer {
 		}
 	}
 
+	@SuppressWarnings("unchecked")
+	static Map<Integer, Object> loadedHolders() {
+		try {
+			return (Map<Integer, Object>) irisHolders(irisManager());
+		} catch (ReflectiveOperationException | RuntimeException exception) {
+			return Map.of();
+		}
+	}
+
 	private static Object irisManager() throws ReflectiveOperationException {
 		Class<?> managerClass = Class.forName(
 			"net.irisshaders.iris.pbr.texture.PBRTextureManager",

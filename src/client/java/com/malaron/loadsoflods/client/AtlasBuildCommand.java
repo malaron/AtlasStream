@@ -53,12 +53,27 @@ public final class AtlasBuildCommand {
 							.executes(context -> reportVirtualTextureCache(context.getSource()))
 					)
 					.then(
+						literal("vram")
+							.requires(net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource::attended)
+							.executes(context -> reportVram(context.getSource()))
+					)
+					.then(
 						literal("build-atlases")
 							.requires(net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource::attended)
 							.executes(context -> buildAtlases(context.getSource()))
 					)
 			)
 		);
+	}
+
+	private static int reportVram(
+		net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource source
+	) {
+		for (String line : VramReport.build(12)) {
+			source.sendFeedback(Component.literal(line));
+			LoadsOfLods.LOGGER.info("VRAM report: {}", line);
+		}
+		return 1;
 	}
 
 	private static int reportVirtualTextureCache(
