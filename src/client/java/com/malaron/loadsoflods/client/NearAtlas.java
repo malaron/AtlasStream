@@ -70,6 +70,12 @@ final class NearAtlas implements AutoCloseable {
 	private final java.util.LinkedHashMap<TextureAtlasSprite, FrameKey> pendingFrames = new java.util.LinkedHashMap<>();
 	private final java.util.LinkedHashMap<TextureAtlasSprite, PreparedFrame> preparing = new java.util.LinkedHashMap<>();
 	private int residentSprites;
+	private double averageBacklog;
+	private int peakBacklog;
+	private int displayedPeak;
+	private int uploadedThisWindow;
+	private int uploadsPerSecond;
+	private int windowTicks;
 	private int failedSprites;
 	private volatile boolean closed;
 	private volatile boolean failed;
@@ -230,13 +236,29 @@ final class NearAtlas implements AutoCloseable {
 			}
 			if (!batch.isEmpty()) {
 				writeAll(albedo, batch);
+					uploadedThisWindow += batch.size();
+				}
+			} catch (java.util.concurrent.ExecutionException | InterruptedException | RuntimeException exception) {
+				LoadsOfLods.LOGGER.error("Could not animate near sprites", exception);
+				if (exception instanceof IllegalStateException) {
+					failed = true;
+				}
 			}
-		} catch (java.util.concurrent.ExecutionException | InterruptedException | RuntimeException exception) {
-			LoadsOfLods.LOGGER.error("Could not animate near sprites", exception);
-			if (exception instanceof IllegalStateException) {
-				failed = true;
+			int backlog = preparing.size();
+			for (TextureAtlasSprite sprite : pendingFrames.keySet()) {
+				if (!preparing.containsKey(sprite)) {
+					backlog++;
+				}
 			}
-		}
+			averageBacklog += (backlog - averageBacklog) * 0.05;
+			peakBacklog = Math.max(peakBacklog, backlog);
+			if (++windowTicks >= 20) {
+				uploadsPerSecond = uploadedThisWindow;
+				displayedPeak = peakBacklog;
+				uploadedThisWindow = 0;
+				peakBacklog = 0;
+				windowTicks = 0;
+			}
 	}
 
 	private static List<LevelData> blend(List<LevelData> current, List<LevelData> next, float weight) {
@@ -265,7 +287,9 @@ final class NearAtlas implements AutoCloseable {
 		long bytes = albedo.committedBytes + normal.committedBytes + specular.committedBytes;
 		return List.of(
 			"Near sparse atlas: " + residentSprites + " sprites resident, " + (jobs.size() + incoming.size())
-				+ " pending, " + failedSprites + " failed, " + pendingFrames.size() + preparing.size() + " animation updates queued",
+				+ " pending, " + failedSprites + " failed",
+			"Near animation: " + uploadsPerSecond + " uploads/s, backlog avg "
+				+ String.format(java.util.Locale.ROOT, "%.0f", averageBacklog) + " peak " + displayedPeak,
 			"Near committed VRAM: " + String.format(java.util.Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024.0))
 				+ (failed ? " (disabled after an error)" : "")
 		);
