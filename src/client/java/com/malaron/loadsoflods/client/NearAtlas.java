@@ -20,6 +20,7 @@ import com.malaron.loadsoflods.LoadsOfLods;
 import com.malaron.loadsoflods.client.AtlasPreviewState.PixelAverager;
 import com.malaron.loadsoflods.client.mixin.AbstractTextureAccessor;
 import com.malaron.loadsoflods.client.mixin.SpriteContentsAccessor;
+import com.malaron.loadsoflods.lod.LodConfig;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.textures.GpuTexture;
@@ -63,11 +64,25 @@ final class NearAtlas implements AutoCloseable {
 		return thread;
 	});
 	private final Set<TextureAtlasSprite> requested = ConcurrentHashMap.newKeySet();
-	private final java.util.Map<TextureAtlasSprite, Set<Long>> sectionUses = new ConcurrentHashMap<>();
-	private final Set<TextureAtlasSprite> alwaysAnimated = ConcurrentHashMap.newKeySet();
+	private final java.util.Map<Long, Set<TextureAtlasSprite>> sectionSprites = new ConcurrentHashMap<>();
+	private final java.util.Map<TextureAtlasSprite, Long> lastTouched = new ConcurrentHashMap<>();
+	private final java.util.Map<TextureAtlasSprite, Long> lastNeeded = new java.util.HashMap<>();
+	private final java.util.Map<TextureAtlasSprite, long[]> pagesBySprite = new java.util.HashMap<>();
+	private final java.util.Map<Long, Integer> pageRefs = new java.util.HashMap<>();
 	private volatile Set<TextureAtlasSprite> activeSprites = Set.of();
+	private volatile double nearReach = -1.0;
+	private volatile double cameraX;
+	private volatile double cameraY;
+	private volatile double cameraZ;
 	private int activeRefreshTicks;
+	private int evictedSprites;
 	private static final double SECTION_RADIUS = 14.0;
+	// Sprites of sections this far beyond the draw distance are kept resident, so they are ready when a section turns near.
+	private static final double PREFETCH_BLOCKS = 32.0;
+	private static final long TOUCH_RECENT_NANOS = 2_000_000_000L;
+	private static final long TOUCH_FORGET_NANOS = 60_000_000_000L;
+	private static final long EVICT_GRACE_NANOS = 10_000_000_000L;
+	private static final int MAX_EVICTIONS_PER_REFRESH = 16;
 	private final ConcurrentLinkedQueue<TextureAtlasSprite> incoming = new ConcurrentLinkedQueue<>();
 	private final List<Job> jobs = new ArrayList<>();
 	private final java.util.Map<TextureAtlasSprite, Geometry> resident = new java.util.HashMap<>();
@@ -165,64 +180,211 @@ final class NearAtlas implements AutoCloseable {
 		}
 	}
 
-	// Safe to call from chunk-build threads. Remembers which sections use an animated sprite.
-	void noteSection(TextureAtlasSprite sprite, long sectionKey) {
-		if (sectionKey != Long.MIN_VALUE && sprite.contents().isAnimated()) {
-			sectionUses.computeIfAbsent(sprite, ignored -> ConcurrentHashMap.newKeySet()).add(sectionKey);
+	// Safe to call from chunk-build threads. Records the sprites a section uses and, when the section is close
+	// enough to be drawn from this atlas soon, requests them so they are resident before the section renders.
+	void noteTerrainSprite(TextureAtlasSprite sprite, long sectionKey) {
+		if (sectionKey == Long.MIN_VALUE) {
+			request(sprite);
+			return;
+		}
+		sectionSprites.computeIfAbsent(sectionKey, ignored -> ConcurrentHashMap.newKeySet()).add(sprite);
+		double reach = nearReach;
+		if (reach >= 0.0) {
+			double dx = SodiumChunkMeshPriority.sectionX(sectionKey) * 16.0 + 8.0 - cameraX;
+			double dy = SodiumChunkMeshPriority.sectionY(sectionKey) * 16.0 + 8.0 - cameraY;
+			double dz = SodiumChunkMeshPriority.sectionZ(sectionKey) * 16.0 + 8.0 - cameraZ;
+			if (Math.sqrt(dx * dx + dy * dy + dz * dz) - SECTION_RADIUS <= reach) {
+				request(sprite);
+			}
 		}
 	}
 
+	// Called when a section is about to be re-meshed; its sprite list is rebuilt by the mesh task.
 	void clearSection(long sectionKey) {
-		for (Set<Long> keys : sectionUses.values()) {
-			keys.remove(sectionKey);
-		}
+		sectionSprites.put(sectionKey, ConcurrentHashMap.newKeySet());
 	}
 
-	// Safe to call from the render thread for sprites with no section (held blocks).
-	void noteAlwaysAnimated(TextureAtlasSprite sprite) {
-		if (sprite.contents().isAnimated()) {
-			alwaysAnimated.add(sprite);
+	// For sprites drawn without a section (held items, entities, particles): resident while they keep being drawn.
+	void touch(TextureAtlasSprite sprite) {
+		if (closed || failed) {
+			return;
 		}
+		lastTouched.put(sprite, System.nanoTime());
+		request(sprite);
 	}
 
-	private void refreshActiveSprites() {
-		double radius = LoadsOfLodsClient.getConfig().highResolutionDistance();
-		Set<TextureAtlasSprite> active = new java.util.HashSet<>(alwaysAnimated);
+	// Render thread only. Works out which sprites are needed (and so resident), which of those animate, and frees
+	// sprites nobody needs when the atlas is over budget.
+	private void refreshSprites() {
+		LodConfig config = LoadsOfLodsClient.getConfig();
+		double radius = config.highResolutionDistance();
+		long now = System.nanoTime();
+		var minecraft = net.minecraft.client.Minecraft.getInstance();
+		var cameraEntity = minecraft.gameRenderer.mainCamera();
+		var camera = cameraEntity.position();
+		cameraX = camera.x;
+		cameraY = camera.y;
+		cameraZ = camera.z;
+
+		Set<TextureAtlasSprite> active = new java.util.HashSet<>();
+		Set<TextureAtlasSprite> needed = new java.util.HashSet<>();
 		if (radius > 0.0) {
-			var minecraft = net.minecraft.client.Minecraft.getInstance();
-			var cameraEntity = minecraft.gameRenderer.mainCamera();
-			var camera = cameraEntity.position();
 			var forward = cameraEntity.forwardVector();
-			double reach = radius + LoadsOfLodsClient.getConfig().hysteresis();
+			double drawReach = radius + config.hysteresis();
+			double reach = drawReach + PREFETCH_BLOCKS;
+			nearReach = reach;
 			double aspect = (double) minecraft.getWindow().getWidth() / Math.max(1, minecraft.getWindow().getHeight());
 			// Cone around the view direction that covers the frustum corners, plus a small margin.
 			double halfAngle = Math.atan(Math.tan(Math.toRadians(cameraEntity.getFov()) / 2.0) * Math.sqrt(1.0 + aspect * aspect))
 				+ Math.toRadians(8.0);
-			for (java.util.Map.Entry<TextureAtlasSprite, Set<Long>> entry : sectionUses.entrySet()) {
-				for (long key : entry.getValue()) {
-					double dx = SodiumChunkMeshPriority.sectionX(key) * 16.0 + 8.0 - camera.x;
-					double dy = SodiumChunkMeshPriority.sectionY(key) * 16.0 + 8.0 - camera.y;
-					double dz = SodiumChunkMeshPriority.sectionZ(key) * 16.0 + 8.0 - camera.z;
-					double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-					if (distance - SECTION_RADIUS > reach) {
-						continue;
-					}
-					boolean visible = distance <= SECTION_RADIUS;
-					if (!visible) {
-						double cos = (dx * forward.x() + dy * forward.y() + dz * forward.z()) / distance;
-						double angle = Math.acos(Math.max(-1.0, Math.min(1.0, cos)));
-						visible = angle <= halfAngle + Math.asin(Math.min(1.0, SECTION_RADIUS / distance));
-					}
-					if (visible) {
-						active.add(entry.getKey());
-						break;
+			for (java.util.Map.Entry<Long, Set<TextureAtlasSprite>> entry : sectionSprites.entrySet()) {
+				long key = entry.getKey();
+				double dx = SodiumChunkMeshPriority.sectionX(key) * 16.0 + 8.0 - camera.x;
+				double dy = SodiumChunkMeshPriority.sectionY(key) * 16.0 + 8.0 - camera.y;
+				double dz = SodiumChunkMeshPriority.sectionZ(key) * 16.0 + 8.0 - camera.z;
+				double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+				if (distance - SECTION_RADIUS > reach) {
+					continue;
+				}
+				needed.addAll(entry.getValue());
+				if (distance - SECTION_RADIUS > drawReach) {
+					continue;
+				}
+				boolean visible = distance <= SECTION_RADIUS;
+				if (!visible) {
+					double cos = (dx * forward.x() + dy * forward.y() + dz * forward.z()) / distance;
+					double angle = Math.acos(Math.max(-1.0, Math.min(1.0, cos)));
+					visible = angle <= halfAngle + Math.asin(Math.min(1.0, SECTION_RADIUS / distance));
+				}
+				if (visible) {
+					for (TextureAtlasSprite sprite : entry.getValue()) {
+						if (sprite.contents().isAnimated()) {
+							active.add(sprite);
+						}
 					}
 				}
 			}
 		} else {
-			active.clear();
+			nearReach = -1.0;
+		}
+
+		java.util.Iterator<java.util.Map.Entry<TextureAtlasSprite, Long>> touched = lastTouched.entrySet().iterator();
+		while (touched.hasNext()) {
+			java.util.Map.Entry<TextureAtlasSprite, Long> entry = touched.next();
+			long age = now - entry.getValue();
+			if (age > TOUCH_FORGET_NANOS) {
+				touched.remove();
+			} else if (age <= TOUCH_RECENT_NANOS) {
+				needed.add(entry.getKey());
+				if (entry.getKey().contents().isAnimated()) {
+					active.add(entry.getKey());
+				}
+			}
+		}
+		for (TextureAtlasSprite sprite : needed) {
+			request(sprite);
+			if (resident.containsKey(sprite)) {
+				lastNeeded.put(sprite, now);
+			}
 		}
 		activeSprites = active;
+		evictUnneeded(needed, config, radius <= 0.0, now);
+	}
+
+	private long committedBytes() {
+		return albedo.committedBytes + normal.committedBytes + specular.committedBytes;
+	}
+
+	// Frees sprites nothing has needed for a while. Normally only when over the cache budget; with the near
+	// distance off there is no use for the atlas, so everything is released.
+	private void evictUnneeded(Set<TextureAtlasSprite> needed, LodConfig config, boolean off, long now) {
+		long budget = config.highResolutionCacheMiB() * 1024L * 1024L;
+		long committed = committedBytes();
+		if (!off && committed <= budget) {
+			return;
+		}
+		long target = off ? 0L : budget / 10 * 9;
+		List<TextureAtlasSprite> victims = new ArrayList<>();
+		for (TextureAtlasSprite sprite : resident.keySet()) {
+			if (!needed.contains(sprite) && now - lastNeeded.getOrDefault(sprite, now) >= EVICT_GRACE_NANOS) {
+				victims.add(sprite);
+			}
+		}
+		if (victims.isEmpty()) {
+			return;
+		}
+		victims.sort(java.util.Comparator.comparingLong(sprite -> lastNeeded.getOrDefault(sprite, now)));
+		int previousBinding = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+		try {
+			for (int i = 0; i < victims.size() && i < MAX_EVICTIONS_PER_REFRESH && (off || committedBytes() > target); i++) {
+				evict(victims.get(i));
+			}
+			checkGl("releasing sparse pages");
+		} catch (IllegalStateException exception) {
+			LoadsOfLods.LOGGER.error("Could not release near sprites", exception);
+			failed = true;
+		} finally {
+			GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousBinding);
+		}
+	}
+
+	private void evict(TextureAtlasSprite sprite) {
+		long[] pages = pagesBySprite.remove(sprite);
+		resident.remove(sprite);
+		lastFrame.remove(sprite);
+		pendingFrames.remove(sprite);
+		PreparedFrame prepared = preparing.remove(sprite);
+		if (prepared != null) {
+			prepared.levels.cancel(false);
+		}
+		lastNeeded.remove(sprite);
+		requested.remove(sprite);
+		residentSprites--;
+		evictedSprites++;
+		if (pages == null) {
+			return;
+		}
+		for (long key : pages) {
+			Integer remaining = pageRefs.merge(key, -1, Integer::sum);
+			if (remaining != null && remaining <= 0) {
+				pageRefs.remove(key);
+				uncommit(albedo, key);
+				uncommit(normal, key);
+				uncommit(specular, key);
+			}
+		}
+	}
+
+	private void uncommit(Layer layer, long key) {
+		if (!layer.committedPages.remove(key)) {
+			return;
+		}
+		int level = (int) (key >>> 48);
+		int pageX = (int) ((key >> 24) & 0xFFFFFF);
+		int pageY = (int) (key & 0xFFFFFF);
+		int commitWidth = Math.min(PAGE, Math.max(1, width >> level) - pageX * PAGE);
+		int commitHeight = Math.min(PAGE, Math.max(1, height >> level) - pageY * PAGE);
+		GL11.glBindTexture(GL11.GL_TEXTURE_2D, layer.id);
+		ARBSparseTexture.glTexPageCommitmentARB(
+			GL11.GL_TEXTURE_2D, level, pageX * PAGE, pageY * PAGE, 0, commitWidth, commitHeight, 1, false
+		);
+		layer.committedBytes -= (long) commitWidth * commitHeight * 4;
+	}
+
+	private long[] pageKeys(List<LevelData> levels) {
+		Set<Long> keys = new java.util.HashSet<>();
+		for (LevelData data : levels) {
+			int levelWidth = Math.max(1, width >> data.level);
+			int levelHeight = Math.max(1, height >> data.level);
+			int lastPageX = Math.min(levelWidth - 1, data.x + data.width - 1) / PAGE;
+			int lastPageY = Math.min(levelHeight - 1, data.y + data.height - 1) / PAGE;
+			for (int pageY = data.y / PAGE; pageY <= lastPageY; pageY++) {
+				for (int pageX = data.x / PAGE; pageX <= lastPageX; pageX++) {
+					keys.add(((long) data.level << 48) | ((long) pageX << 24) | pageY);
+				}
+			}
+		}
+		return keys.stream().mapToLong(Long::longValue).toArray();
 	}
 
 	// Render thread only.
@@ -232,7 +394,7 @@ final class NearAtlas implements AutoCloseable {
 		}
 		if (activeRefreshTicks-- <= 0) {
 			activeRefreshTicks = 3;
-			refreshActiveSprites();
+			refreshSprites();
 		}
 		for (int started = 0; started < MAX_NEW_JOBS_PER_TICK; started++) {
 			TextureAtlasSprite sprite = incoming.poll();
@@ -304,6 +466,9 @@ final class NearAtlas implements AutoCloseable {
 					continue;
 				}
 				ready.remove();
+				if (!resident.containsKey(entry.getKey())) {
+					continue;
+				}
 				batch.add(entry.getValue().levels.get());
 				lastFrame.put(entry.getKey(), entry.getValue().key);
 			}
@@ -357,13 +522,14 @@ final class NearAtlas implements AutoCloseable {
 	}
 
 	List<String> debugLines() {
-		long bytes = albedo.committedBytes + normal.committedBytes + specular.committedBytes;
+		long bytes = committedBytes();
 		return List.of(
 			"Near sparse atlas: " + residentSprites + " sprites resident, " + (jobs.size() + incoming.size())
-				+ " pending, " + failedSprites + " failed",
+				+ " pending, " + evictedSprites + " evicted, " + failedSprites + " failed",
 			"Near animation: " + activeSprites.size() + " sprites active, " + uploadsPerSecond + " uploads/s, backlog avg "
 				+ String.format(java.util.Locale.ROOT, "%.0f", averageBacklog) + " peak " + displayedPeak,
 			"Near committed VRAM: " + String.format(java.util.Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024.0))
+				+ " / budget " + LoadsOfLodsClient.getConfig().highResolutionCacheMiB() + " MiB"
 				+ (failed ? " (disabled after an error)" : "")
 		);
 	}
@@ -393,6 +559,11 @@ final class NearAtlas implements AutoCloseable {
 			write(albedo, job.albedo);
 			write(normal, pbr.get(0));
 			write(specular, pbr.get(1));
+			pagesBySprite.put(job.sprite, pageKeys(job.albedo));
+			for (long key : pagesBySprite.get(job.sprite)) {
+				pageRefs.merge(key, 1, Integer::sum);
+			}
+			lastNeeded.put(job.sprite, System.nanoTime());
 			residentSprites++;
 			resident.put(job.sprite, job.geometry);
 		} catch (java.util.concurrent.ExecutionException | InterruptedException | RuntimeException exception) {

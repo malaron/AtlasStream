@@ -32,8 +32,13 @@ full-resolution atlas. With an Iris shaderpack active, the reduced atlas (albedo
 plus normal/specular LabPBR maps, averaged per channel to the same ratio) serves
 distant terrain, and a separate full-size *sparse* "near atlas" (needs
 `GL_ARB_sparse_texture`) serves nearby terrain, held items, entities and
-particles. The near atlas commits GPU pages only for sprites actually used, so
-the full-resolution VRAM is mostly not spent. Its albedo and PBR content is
+particles. The near atlas commits GPU pages only for sprites used by sections
+within the high-resolution distance (plus a two-chunk prefetch margin) or drawn
+recently, so the full-resolution VRAM is mostly not spent. When its committed
+memory exceeds `highResolutionCacheMiB`, sprites no nearby section needs
+(unused for 10 seconds) are released, least recently needed first; the budget
+is soft, so the current working set is never evicted. With the distance at 0,
+all near memory is released. Its albedo and PBR content is
 streamed from the resource pack on worker threads; PBR maps stay vanilla
 (first frame only) while albedo animates, interpolated like vanilla, but only
 for sprites used by sections that are in range and in view. At a distance of 0

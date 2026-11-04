@@ -269,8 +269,7 @@ public final class AtlasPreviewState {
 	public static void recordSpriteUsage(net.minecraft.client.renderer.texture.TextureAtlasSprite sprite) {
 		NearAtlas near = nearAtlas;
 		if (near != null && TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
-			near.request(sprite);
-			near.noteAlwaysAnimated(sprite);
+			near.touch(sprite);
 		}
 	}
 
@@ -287,8 +286,7 @@ public final class AtlasPreviewState {
 	public static void recordChunkSpriteUsage(net.minecraft.client.renderer.texture.TextureAtlasSprite sprite) {
 		NearAtlas near = nearAtlas;
 		if (near != null) {
-			near.request(sprite);
-			near.noteSection(sprite, SodiumChunkMeshPriority.currentSectionKey());
+			near.noteTerrainSprite(sprite, SodiumChunkMeshPriority.currentSectionKey());
 		}
 		VIRTUAL_TEXTURE_REQUEST_TRACKER.recordSpriteUsage(
 			sprite.getU0(),

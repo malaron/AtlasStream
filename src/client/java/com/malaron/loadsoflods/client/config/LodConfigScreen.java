@@ -67,7 +67,7 @@ final class LodConfigScreen {
 		Option<Long> cacheOption = Option.<Long>createBuilder()
 			.name(Component.literal("High-resolution cache (MiB)"))
 			.description(OptionDescription.of(Component.literal(
-				"VRAM budget for streamed full-resolution tiles. Not used with Iris shaderpacks."
+				"VRAM budget for full-resolution textures. Without Iris it sizes the streamed tile cache; with Iris it is the soft limit for the near atlas, above which sprites no nearby section uses are released."
 			)))
 			.binding(defaults.highResolutionCacheMiB(), () -> cacheMiB[0], value -> cacheMiB[0] = value)
 			.controller(option -> LongSliderControllerBuilder.create(option)
