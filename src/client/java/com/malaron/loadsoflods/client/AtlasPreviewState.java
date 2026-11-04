@@ -48,7 +48,7 @@ import net.minecraft.server.packs.resources.ResourceManager;
 
 public final class AtlasPreviewState {
 	private static final int VIRTUAL_TILE_SIZE = 128;
-	private static final long MAX_PREVIEW_BYTES = 1024L * 1024 * 1024;
+	private static final long MAX_PREVIEW_BYTES = 2048L * 1024 * 1024;
 	private static final int MAX_PENDING_TILE_REQUESTS = 8192;
 	private static final int MAX_UV_QUADS_PER_TICK = 128;
 	private static final int MAX_TILE_KEYS_PER_TICK = 512;
@@ -605,7 +605,7 @@ public final class AtlasPreviewState {
 		if (imageBytes > MAX_PREVIEW_BYTES) {
 			throw new IOException(
 				"Low-resolution block atlas is " + lowAtlasWidth + "x" + lowAtlasHeight
-					+ " with " + lowMipLevelCount + " mip levels, exceeding the 1 GiB safety limit"
+					+ " with " + lowMipLevelCount + " mip levels, exceeding the 2 GiB safety limit"
 			);
 		}
 		List<NativeImage> mipLevels = new ArrayList<>(lowMipLevelCount);
@@ -834,7 +834,7 @@ public final class AtlasPreviewState {
 				long levelBytes = (long) width * height * 4;
 				totalImageBytes[0] += levelBytes;
 				if (totalImageBytes[0] > MAX_PREVIEW_BYTES) {
-					throw new IOException("Animated low-atlas frames would exceed the 1 GiB CPU image safety limit");
+					throw new IOException("Animated low-atlas frames would exceed the 2 GiB CPU image safety limit");
 				}
 				NativeImage mipLevel = new NativeImage(width, height, true);
 				mipLevels.add(mipLevel);
