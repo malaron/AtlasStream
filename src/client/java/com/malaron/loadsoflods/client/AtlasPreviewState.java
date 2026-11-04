@@ -624,6 +624,7 @@ public final class AtlasPreviewState {
 	}
 
 	public static synchronized void serviceVirtualTextureRequests() {
+		serviceIrisSwitch();
 		serviceReloadRebuild();
 		serviceParkedActivation();
 		NearAtlas near = nearAtlas;
@@ -882,9 +883,28 @@ public final class AtlasPreviewState {
 	// True while a reduced rebuild is guaranteed to follow a resource reload, so Iris's full-size blocks PBR atlases
 	// would be built only to be discarded. The rebuild registers reduced maps itself.
 	public static synchronized boolean shouldSkipIrisBlockPbrLoad(TextureAtlas atlas) {
-		return (reloadRebuildPending || (reloadBuildRunning && BUILDING.get()))
+		return (reloadRebuildPending || (reloadBuildRunning && BUILDING.get()) || irisSwitchNeedsRebuild())
 			&& TextureAtlas.LOCATION_BLOCKS.equals(atlas.location())
 			&& SodiumLodBridge.isIrisShaderPackInUse();
+	}
+
+	// Shaders were switched on while the non-Iris streamed preview was active: there is no near atlas or reduced PBR,
+	// and the full atlas is gone, so the preview must be rebuilt through a resource reload.
+	private static boolean irisSwitchNeedsRebuild() {
+		return distancePreviewEnabled && atlasOwnsLowResolutionTexture && nearAtlas == null
+			&& SodiumLodBridge.isIrisShaderPackInUse();
+	}
+
+	private static boolean irisSwitchReloadRequested;
+
+	private static void serviceIrisSwitch() {
+		if (irisSwitchReloadRequested || !irisSwitchNeedsRebuild()) {
+			return;
+		}
+		irisSwitchReloadRequested = true;
+		reloadRebuildPending = true;
+		LoadsOfLods.LOGGER.info("Shaders were enabled with the streamed preview active; reloading resources to rebuild it for Iris");
+		Minecraft.getInstance().reloadResourcePacks();
 	}
 
 	private static boolean reloadRebuildPending;
@@ -963,6 +983,7 @@ public final class AtlasPreviewState {
 	public static synchronized void beforeAtlasReload(TextureAtlas atlas) {
 		if (TextureAtlas.LOCATION_BLOCKS.equals(atlas.location()) && previewedAtlas == atlas) {
 			reloadRebuildPending |= distancePreviewEnabled;
+			irisSwitchReloadRequested = false;
 			lowPreviewEnabled = false;
 			distancePreviewEnabled = false;
 			detachAtlasOwnedLowResolutionTexture();
