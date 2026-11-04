@@ -284,11 +284,44 @@ final class IrisPbrAtlasReducer {
 		return samples[0];
 	}
 
-	private static int averageNormal(int first, int second, int third, int fourth) {
+	static int averageNormal(int first, int second, int third, int fourth) {
 		return PbrTextureDownsampler.averageLabPbrNormalPixels(new int[] {first, second, third, fourth}, 4);
 	}
 
-	private static int averageSpecular(int first, int second, int third, int fourth) {
+	static int averageSpecular(int first, int second, int third, int fourth) {
 		return PbrTextureDownsampler.averageLabPbrSpecularPixels(new int[] {first, second, third, fourth}, 4);
+	}
+
+	// Registers PBR maps for an albedo texture Iris did not create, via a holder proxy (its implementation is private).
+	static void registerHolder(int albedoGlId, AbstractTexture normal, AbstractTexture specular) {
+		try {
+			Class<?> holderInterface = Class.forName(
+				"net.irisshaders.iris.pbr.texture.PBRTextureHolder",
+				false,
+				IrisPbrAtlasReducer.class.getClassLoader()
+			);
+			Object holder = java.lang.reflect.Proxy.newProxyInstance(
+				holderInterface.getClassLoader(),
+				new Class<?>[] {holderInterface},
+				(proxy, method, arguments) -> switch (method.getName()) {
+					case "normalTexture" -> normal;
+					case "specularTexture" -> specular;
+					case "hashCode" -> System.identityHashCode(proxy);
+					case "equals" -> proxy == arguments[0];
+					default -> "Loads of Lods sparse PBR holder";
+				}
+			);
+			irisHolders(irisManager()).put(albedoGlId, holder);
+		} catch (ReflectiveOperationException | RuntimeException exception) {
+			LoadsOfLods.LOGGER.error("Could not register sparse PBR maps with Iris", exception);
+		}
+	}
+
+	static void unregisterHolder(int albedoGlId) {
+		try {
+			irisHolders(irisManager()).remove(albedoGlId);
+		} catch (ReflectiveOperationException | RuntimeException exception) {
+			LoadsOfLods.LOGGER.warn("Could not unregister sparse PBR maps from Iris", exception);
+		}
 	}
 }

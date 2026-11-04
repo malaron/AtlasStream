@@ -247,7 +247,23 @@ public final class AtlasPreviewState {
 		}
 	}
 
+	private static volatile NearAtlas nearAtlas;
+
+	public static boolean isNearAtlasActive() {
+		NearAtlas near = nearAtlas;
+		return near != null && near.isUsable();
+	}
+
+	public static GpuTextureView nearAtlasView() {
+		NearAtlas near = nearAtlas;
+		return near != null && near.isUsable() ? near.albedoView() : null;
+	}
+
 	public static void recordChunkSpriteUsage(net.minecraft.client.renderer.texture.TextureAtlasSprite sprite) {
+		NearAtlas near = nearAtlas;
+		if (near != null) {
+			near.request(sprite);
+		}
 		VIRTUAL_TEXTURE_REQUEST_TRACKER.recordSpriteUsage(
 			sprite.getU0(),
 			sprite.getV0(),
@@ -259,6 +275,10 @@ public final class AtlasPreviewState {
 	}
 
 	public static synchronized void serviceVirtualTextureRequests() {
+		NearAtlas near = nearAtlas;
+		if (near != null) {
+			near.service();
+		}
 		VirtualTextureGpuPageTable pageTable = virtualTextureGpuPageTable;
 		VirtualTextureLayout layout = virtualTextureLayout;
 		if (!isDistancePreviewEnabled()
@@ -445,6 +465,11 @@ public final class AtlasPreviewState {
 		);
 		if (!reducedPbrAtlases.isEmpty()) {
 			lines.add("[Loads of Lods] Iris PBR atlases reduced: " + reducedPbrAtlases.size() + "/2");
+		}
+		if (nearAtlas != null) {
+			for (String line : nearAtlas.debugLines()) {
+				lines.add("[Loads of Lods] " + line);
+			}
 		}
 		VirtualTextureCacheStatus status = virtualTextureCacheStatus();
 		if (status.available() && !SodiumLodBridge.isIrisShaderPackInUse()) {
@@ -1030,6 +1055,18 @@ public final class AtlasPreviewState {
 				Object pbrHolder = image.pbrImages() != null
 					? IrisPbrAtlasReducer.detachHolder(highResolutionTexture)
 					: null;
+				if (image.pbrImages() != null) {
+					NearAtlas created = NearAtlas.create(
+						highResolutionTexture.getWidth(0),
+						highResolutionTexture.getHeight(0),
+						highResolutionTexture.getMipLevels(),
+						net.minecraft.client.Minecraft.getInstance().getResourceManager()
+					);
+					if (nearAtlas != null) {
+						nearAtlas.close();
+					}
+					nearAtlas = created;
+				}
 				replaceBlockAtlasWithLowResolution(atlas, highResolutionTexture, texture, textureView);
 				if (image.pbrImages() != null) {
 					reducedPbrAtlases = IrisPbrAtlasReducer.apply(pbrHolder, texture, image.pbrImages(), image.downscaleFactor());
@@ -1219,6 +1256,11 @@ public final class AtlasPreviewState {
 		lowPreviewEnabled = false;
 		distancePreviewEnabled = false;
 		previewedAtlas = null;
+		NearAtlas near = nearAtlas;
+		nearAtlas = null;
+		if (near != null) {
+			near.close();
+		}
 		virtualTextureLayout = null;
 		pendingVirtualTextureQuads.clear();
 		pendingVirtualTextureTiles.clear();

@@ -110,7 +110,7 @@ public final class SodiumLodBridge {
 		};
 		Method renderMethod = RENDER_METHODS.get(renderer.getClass());
 		boolean distancePreview = AtlasPreviewState.isDistancePreviewEnabled();
-		boolean irisShaderpack = distancePreview && isIrisShaderPackInUse();
+		boolean irisShaderpack = distancePreview && isIrisShaderPackInUse() && !AtlasPreviewState.isNearAtlasActive();
 		boolean translucent = isTranslucent(terrainRenderPass);
 		if (irisShaderpack) {
 			ACTIVE_LOD.set(SectionLod.LOW_RESOLUTION);
@@ -133,6 +133,9 @@ public final class SodiumLodBridge {
 				prepare(renderer, renderLists, cameraTransform, translucentSorting);
 			}
 			arguments[1] = renderLists;
+			if (distancePreview && isIrisShaderPackInUse()) {
+				refreshIrisPbrSamplers();
+			}
 			invoke(renderMethod, renderer, arguments);
 			return;
 		}
@@ -181,6 +184,11 @@ public final class SodiumLodBridge {
 	}
 
 	public static com.mojang.renderpearl.api.textures.GpuTextureView lowAtlasForCurrentPass() {
+		if (ACTIVE_LOD.get() == SectionLod.HIGH_RESOLUTION
+				&& AtlasPreviewState.isDistancePreviewEnabled()
+				&& isIrisShaderPackInUse()) {
+			return AtlasPreviewState.nearAtlasView();
+		}
 		if (!useLowResolutionForCurrentPass()) {
 			return null;
 		}
