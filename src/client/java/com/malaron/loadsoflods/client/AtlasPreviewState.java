@@ -373,7 +373,13 @@ public final class AtlasPreviewState {
 	private static long streamGeneration = Long.MIN_VALUE;
 	private static volatile java.util.Set<String> activeAnimatedSprites = java.util.Set.of();
 	// Displayed frame (strip index) of every animated sprite, updated each tick by updateAnimatedFrames.
-	private static final java.util.Map<String, Integer> spriteFrames = new java.util.concurrent.ConcurrentHashMap<>();
+	private static final java.util.Map<String, FrameState> spriteFrames = new java.util.concurrent.ConcurrentHashMap<>();
+	private static final int BLEND_STEPS = 16;
+
+	// frame is the strip index shown, next the one it blends toward by blend/BLEND_STEPS (0 when not blending).
+	private record FrameState(int frame, int next, int blend) {
+		private static final FrameState FIRST = new FrameState(0, 0, 0);
+	}
 	private static final java.util.LinkedHashMap<VirtualTextureTileKey, AnimatedTile> animatedTiles =
 		new java.util.LinkedHashMap<>();
 	private static final int MAX_ANIMATED_TILES_IN_FLIGHT = 24;
@@ -388,7 +394,7 @@ public final class AtlasPreviewState {
 	private static final java.util.LinkedHashMap<VirtualTextureTileKey, PreparedTile> preparingTiles =
 		new java.util.LinkedHashMap<>();
 
-	private record AnimatedTile(List<String> names, int[] frames) {
+	private record AnimatedTile(List<String> names, FrameState[] frames) {
 	}
 
 	private record PreparedTile(AnimatedTile snapshot, java.util.concurrent.Future<List<NativeImage>> images) {
@@ -505,9 +511,9 @@ public final class AtlasPreviewState {
 
 	private static AnimatedTile snapshotAnimatedTile(VirtualTextureTileBuilder builder, VirtualTextureTileKey key) {
 		List<String> names = builder.animatedSpriteNames(key);
-		int[] frames = new int[names.size()];
+		FrameState[] frames = new FrameState[names.size()];
 		for (int index = 0; index < frames.length; index++) {
-			frames[index] = spriteFrames.getOrDefault(names.get(index), 0);
+			frames[index] = spriteFrames.getOrDefault(names.get(index), FrameState.FIRST);
 		}
 		return new AnimatedTile(names, frames);
 	}
@@ -1568,10 +1574,18 @@ public final class AtlasPreviewState {
 					return;
 				}
 				NearAtlas near = nearAtlas;
+				AnimationStep currentStep = animation.steps().get(framePosition);
+				boolean blendFrames = animation.interpolated() && subFrame > 0;
 				spriteFrames.put(
 					sprite.contents().name().toString(),
-					animation.steps().get(framePosition).frameIndex()
-				); 
+					new FrameState(
+						currentStep.frameIndex(),
+						blendFrames
+							? animation.steps().get((framePosition + 1) % animation.steps().size()).frameIndex()
+							: currentStep.frameIndex(),
+						blendFrames ? Math.round(Math.min(1.0F, subFrame / (float) currentStep.duration()) * BLEND_STEPS) : 0
+					)
+				);
 				if (near != null) {
 					AnimationStep nearStep = animation.steps().get(framePosition);
 					int nearNext = animation.steps().get((framePosition + 1) % animation.steps().size()).frameIndex();
@@ -2002,14 +2016,50 @@ public final class AtlasPreviewState {
 		);
 		builder.setAnimationFrames((name, mipLevel) -> {
 			AnimatedStrip strip = strips.get(name);
-			Integer frame = spriteFrames.get(name);
-			return strip == null || frame == null ? null : strip.frame(frame, mipLevel);
+			FrameState state = spriteFrames.get(name);
+			return strip == null || state == null ? null : strip.frame(state, mipLevel);
 		});
 		return builder;
 	}
 
 	// The full-resolution frame strip of an animated sprite. A frame is a view into the strip, not a copy.
 	private record AnimatedStrip(NativeImage[] mips, int frameWidth, int frameHeight) {
+		MipImage frame(FrameState state, int mipLevel) {
+			MipImage current = frame(state.frame(), mipLevel);
+			if (current == null || state.blend() == 0 || state.next() == state.frame()) {
+				return current;
+			}
+			MipImage next = frame(state.next(), mipLevel);
+			if (next == null) {
+				return current;
+			}
+			int weight = state.blend();
+			return new MipImage() {
+				@Override
+				public int width() {
+					return current.width();
+				}
+
+				@Override
+				public int height() {
+					return current.height();
+				}
+
+				@Override
+				public int pixel(int x, int y) {
+					int a = current.pixel(x, y);
+					int b = next.pixel(x, y);
+					int result = 0;
+					for (int shift = 0; shift < 32; shift += 8) {
+						int from = a >>> shift & 255;
+						int to = b >>> shift & 255;
+						result |= (from + (to - from) * weight / BLEND_STEPS & 255) << shift;
+					}
+					return result;
+				}
+			};
+		}
+
 		MipImage frame(int frameIndex, int mipLevel) {
 			if (mipLevel >= mips.length) {
 				return null;
