@@ -895,15 +895,34 @@ public final class AtlasPreviewState {
 			&& SodiumLodBridge.isIrisShaderPackInUse();
 	}
 
+	// Shaders were switched off while the Iris preview was active: terrain needs the streamed (non-Iris) preview.
+	private static boolean shadersSwitchedOffNeedsRebuild() {
+		return distancePreviewEnabled && atlasOwnsLowResolutionTexture && nearAtlas != null
+			&& !SodiumLodBridge.isIrisShaderPackInUse();
+	}
+
 	private static boolean irisSwitchReloadRequested;
+	private static int irisSwitchStableTicks;
 
 	private static void serviceIrisSwitch() {
-		if (irisSwitchReloadRequested || !irisSwitchNeedsRebuild()) {
+		if (irisSwitchReloadRequested) {
+			return;
+		}
+		boolean enabled = irisSwitchNeedsRebuild();
+		// Iris recreates its pipeline for a moment during some changes, so require the state to hold.
+		if (!enabled && !shadersSwitchedOffNeedsRebuild()) {
+			irisSwitchStableTicks = 0;
+			return;
+		}
+		if (++irisSwitchStableTicks < 20) {
 			return;
 		}
 		irisSwitchReloadRequested = true;
 		reloadRebuildPending = true;
-		LoadsOfLods.LOGGER.info("Shaders were enabled with the streamed preview active; reloading resources to rebuild it for Iris");
+		LoadsOfLods.LOGGER.info(
+			"Shaders were switched {} with the preview active; reloading resources to rebuild it",
+			enabled ? "on" : "off"
+		);
 		Minecraft.getInstance().reloadResourcePacks();
 	}
 
