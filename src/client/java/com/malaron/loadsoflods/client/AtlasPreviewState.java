@@ -119,6 +119,8 @@ public final class AtlasPreviewState {
 		synchronized (AtlasPreviewState.class) {
 			buildGeneration = generation;
 		}
+		boolean defer = deferActivationUntilIris;
+		deferActivationUntilIris = false;
 		try {
 			highResolutionTexture = atlas.getTexture();
 			atlasWidth = highResolutionTexture.getWidth(0);
@@ -126,7 +128,9 @@ public final class AtlasPreviewState {
 			mipLevelCount = highResolutionTexture.getMipLevels();
 			regions = snapshotRegions(atlas, atlasWidth, atlasHeight);
 			downscaleFactor = selectDownscaleFactor(regions, atlasWidth, atlasHeight);
-			reducePbr = enableDistancePreview && SodiumLodBridge.isIrisShaderPackInUse();
+			// The PBR images only need the resource pack, so they can be built before Iris has its pipeline.
+			reducePbr = enableDistancePreview && (SodiumLodBridge.isIrisShaderPackInUse()
+				|| (defer && SodiumLodBridge.isIrisConfiguredForShaders()));
 		} catch (RuntimeException exception) {
 			BUILDING.set(false);
 			throw exception;
@@ -146,7 +150,7 @@ public final class AtlasPreviewState {
 			} catch (IOException exception) {
 				throw new java.util.concurrent.CompletionException(exception);
 			}
-		}).whenComplete((image, failure) -> Minecraft.getInstance().execute(() -> {
+		}).whenComplete((image, failure) -> Minecraft.getInstance().execute(() -> activateOrPark(defer, () -> {
 			try {
 				if (failure != null) {
 					Throwable cause = failure.getCause() == null ? failure : failure.getCause();
@@ -204,7 +208,42 @@ public final class AtlasPreviewState {
 				reloadBuildRunning = false;
 				BUILDING.set(false);
 			}
-		}));
+		})));
+	}
+
+	private static boolean deferActivationUntilIris;
+	private static Runnable parkedActivation;
+	private static int parkedActivationTicks;
+
+	private static boolean irisActivationReady() {
+		return Minecraft.getInstance().level != null && SodiumLodBridge.isIrisShaderPackInUse();
+	}
+
+	// A build finished before Iris created its pipeline is held until it exists, since the GPU side needs Iris's
+	// PBR holders. Only the cheap GPU step waits; the images are already built.
+	private static void activateOrPark(boolean defer, Runnable activate) {
+		if (defer && !irisActivationReady()) {
+			parkedActivation = activate;
+			parkedActivationTicks = 0;
+			return;
+		}
+		activate.run();
+	}
+
+	private static void serviceParkedActivation() {
+		Runnable parked = parkedActivation;
+		if (parked == null) {
+			return;
+		}
+		boolean ready = irisActivationReady();
+		if (Minecraft.getInstance().level != null) {
+			parkedActivationTicks++;
+		}
+		// If Iris never activates (shaders failed to load), activate anyway after a while.
+		if (ready || parkedActivationTicks > 1200) {
+			parkedActivation = null;
+			parked.run();
+		}
 	}
 
 	public static boolean isBuilding() {
@@ -330,6 +369,7 @@ public final class AtlasPreviewState {
 
 	public static synchronized void serviceVirtualTextureRequests() {
 		serviceReloadRebuild();
+		serviceParkedActivation();
 		NearAtlas near = nearAtlas;
 		if (near != null) {
 			near.service();
@@ -611,13 +651,16 @@ public final class AtlasPreviewState {
 		}
 		reloadRebuildTicks = -1;
 		Minecraft client = Minecraft.getInstance();
+		boolean early = false;
 		if (BUILDING.get()) {
 			reloadRebuildTicks = 20;
 			return;
 		}
 		if (launchRebuild) {
-			// Iris only creates its pipeline when a world is rendered, so wait for that before giving up.
-			boolean ready = client.level != null && previewPrerequisitesMet();
+			// With Iris shaders configured on, start now: the images are built in the background and activation
+			// waits for Iris. Otherwise wait for a world so the prerequisites can be detected.
+			early = SodiumLodBridge.isIrisConfiguredForShaders();
+			boolean ready = early || (client.level != null && previewPrerequisitesMet());
 			if (!ready && (client.level == null || launchWaitTicks++ < LAUNCH_WAIT_LIMIT_TICKS)) {
 				reloadRebuildTicks = 20;
 				return;
@@ -627,7 +670,7 @@ public final class AtlasPreviewState {
 		reloadRebuildPending = false;
 		if (!(client.getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS) instanceof TextureAtlas atlas)
 				|| !net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("sodium")
-				|| (!SodiumLodBridge.isIrisShaderPackInUse()
+				|| (!early && !SodiumLodBridge.isIrisShaderPackInUse()
 					&& !com.malaron.loadsoflods.cache.VirtualTextureShaderPatcher.isPatchApplied())
 				|| distancePreviewEnabled) {
 			LoadsOfLods.LOGGER.info("Not rebuilding the distance preview after the resource reload; run /lods preview-distance");
@@ -635,6 +678,7 @@ public final class AtlasPreviewState {
 		}
 		LoadsOfLods.LOGGER.info("Rebuilding the distance preview after a resource reload");
 		reloadBuildRunning = true;
+		deferActivationUntilIris = early && !SodiumLodBridge.isIrisShaderPackInUse();
 		try {
 			buildAndEnable(
 				atlas,

@@ -271,6 +271,20 @@ public final class SodiumLodBridge {
 		}
 	}
 
+	// Whether the user has shaders switched on in Iris's config. Valid before Iris has created its pipeline (title screen).
+	public static boolean isIrisConfiguredForShaders() {
+		if (!FabricLoader.getInstance().isModLoaded("iris")) {
+			return false;
+		}
+		try {
+			Class<?> irisClass = Class.forName("net.irisshaders.iris.Iris", false, SodiumLodBridge.class.getClassLoader());
+			Object config = irisClass.getMethod("getIrisConfig").invoke(null);
+			return config != null && (boolean) config.getClass().getMethod("areShadersEnabled").invoke(config);
+		} catch (ReflectiveOperationException | RuntimeException exception) {
+			return false;
+		}
+	}
+
 	public static boolean isIrisShaderPackInUse() {
 		if (!FabricLoader.getInstance().isModLoaded("iris")) {
 			return false;
