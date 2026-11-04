@@ -62,6 +62,8 @@ final class NearAtlas implements AutoCloseable {
 	private final Set<TextureAtlasSprite> requested = ConcurrentHashMap.newKeySet();
 	private final ConcurrentLinkedQueue<TextureAtlasSprite> incoming = new ConcurrentLinkedQueue<>();
 	private final List<Job> jobs = new ArrayList<>();
+	private final java.util.Map<TextureAtlasSprite, Geometry> resident = new java.util.HashMap<>();
+	private final java.util.Map<TextureAtlasSprite, Integer> lastFrame = new java.util.HashMap<>();
 	private int residentSprites;
 	private int failedSprites;
 	private volatile boolean closed;
@@ -132,6 +134,10 @@ final class NearAtlas implements AutoCloseable {
 		return !closed && !failed;
 	}
 
+	GpuTexture albedoTexture() {
+		return albedo.texture;
+	}
+
 	GpuTextureView albedoView() {
 		return albedo.view;
 	}
@@ -171,6 +177,26 @@ final class NearAtlas implements AutoCloseable {
 		}
 	}
 
+	// Render thread only. Re-uploads the albedo for a resident animated sprite when its frame changed. PBR maps keep frame 0.
+	void animate(TextureAtlasSprite sprite, int frameIndex) {
+		if (closed || failed) {
+			return;
+		}
+		Geometry geometry = resident.get(sprite);
+		if (geometry == null || lastFrame.getOrDefault(sprite, -1) == frameIndex) {
+			return;
+		}
+		lastFrame.put(sprite, frameIndex);
+		try {
+			write(albedo, albedoLevels(sprite, geometry, frameIndex));
+		} catch (RuntimeException exception) {
+			LoadsOfLods.LOGGER.error("Could not animate near sprite {}", sprite.contents().name(), exception);
+			if (exception instanceof IllegalStateException) {
+				failed = true;
+			}
+		}
+	}
+
 	List<String> debugLines() {
 		long bytes = albedo.committedBytes + normal.committedBytes + specular.committedBytes;
 		return List.of(
@@ -188,12 +214,12 @@ final class NearAtlas implements AutoCloseable {
 			return;
 		}
 		try {
-			List<LevelData> albedoLevels = albedoLevels(sprite, geometry);
+			List<LevelData> albedoLevels = albedoLevels(sprite, geometry, 0);
 			Future<List<List<LevelData>>> pbr = executor.submit(() -> List.of(
 				pbrLevels(sprite.contents().name(), "_n", DEFAULT_NORMAL, IrisPbrAtlasReducer::averageNormal, geometry),
 				pbrLevels(sprite.contents().name(), "_s", DEFAULT_SPECULAR, IrisPbrAtlasReducer::averageSpecular, geometry)
 			));
-			jobs.add(new Job(sprite, albedoLevels, pbr));
+			jobs.add(new Job(sprite, geometry, albedoLevels, pbr));
 		} catch (RuntimeException exception) {
 			failedSprites++;
 			LoadsOfLods.LOGGER.warn("Could not prepare near sprite {}: {}", sprite.contents().name(), exception.getMessage());
@@ -207,6 +233,7 @@ final class NearAtlas implements AutoCloseable {
 			write(normal, pbr.get(0));
 			write(specular, pbr.get(1));
 			residentSprites++;
+			resident.put(job.sprite, job.geometry);
 		} catch (java.util.concurrent.ExecutionException | InterruptedException | RuntimeException exception) {
 			failedSprites++;
 			LoadsOfLods.LOGGER.error("Could not upload near sprite {}", job.sprite.contents().name(), exception);
@@ -229,17 +256,23 @@ final class NearAtlas implements AutoCloseable {
 		return new Geometry(sprite.getX(), sprite.getY(), w, h, padX, padY);
 	}
 
-	private List<LevelData> albedoLevels(TextureAtlasSprite sprite, Geometry geometry) {
+	private List<LevelData> albedoLevels(TextureAtlasSprite sprite, Geometry geometry, int frameIndex) {
 		NativeImage[] mips = ((SpriteContentsAccessor) sprite.contents()).loadsOfLods$getMipImages();
+		int columns = Math.max(1, mips[0].getWidth() / Math.max(1, geometry.width));
+		int rows = Math.max(1, mips[0].getHeight() / Math.max(1, geometry.height));
+		int frameColumn = frameIndex % columns;
+		int frameRow = Math.min(rows - 1, frameIndex / columns);
 		List<LevelData> levels = new ArrayList<>();
 		for (int level = 0; level < Math.min(mipLevels, mips.length); level++) {
 			NativeImage image = mips[level];
-			int sw = Math.min(image.getWidth(), Math.max(1, geometry.width >> level));
-			int sh = Math.min(image.getHeight(), Math.max(1, geometry.height >> level));
+			int sw = Math.max(1, image.getWidth() / columns);
+			int sh = Math.max(1, image.getHeight() / rows);
+			int originX = frameColumn * sw;
+			int originY = frameRow * sh;
 			int[] source = new int[sw * sh];
 			for (int y = 0; y < sh; y++) {
 				for (int x = 0; x < sw; x++) {
-					source[y * sw + x] = image.getPixel(x, y);
+					source[y * sw + x] = image.getPixel(originX + x, originY + y);
 				}
 			}
 			levels.add(padded(level, geometry, source, sw, sh));
@@ -478,6 +511,6 @@ final class NearAtlas implements AutoCloseable {
 	private record LevelData(int level, int x, int y, int width, int height, int[] argb) {
 	}
 
-	private record Job(TextureAtlasSprite sprite, List<LevelData> albedo, Future<List<List<LevelData>>> pbr) {
+	private record Job(TextureAtlasSprite sprite, Geometry geometry, List<LevelData> albedo, Future<List<List<LevelData>>> pbr) {
 	}
 }

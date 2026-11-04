@@ -249,6 +249,30 @@ public final class AtlasPreviewState {
 
 	private static volatile NearAtlas nearAtlas;
 
+	// Non-terrain draws (held blocks, falling blocks) sample the blocks atlas through its texture slot.
+	public static GpuTextureView nearAtlasViewForSlot(Object atlas) {
+		NearAtlas near = nearAtlas;
+		if (near == null || atlas != previewedAtlas || !near.isUsable() || !SodiumLodBridge.isIrisShaderPackInUse()) {
+			return null;
+		}
+		return near.albedoView();
+	}
+
+	public static GpuTexture nearAtlasTextureForSlot(Object atlas) {
+		NearAtlas near = nearAtlas;
+		if (near == null || atlas != previewedAtlas || !near.isUsable() || !SodiumLodBridge.isIrisShaderPackInUse()) {
+			return null;
+		}
+		return near.albedoTexture();
+	}
+
+	public static void recordSpriteUsage(net.minecraft.client.renderer.texture.TextureAtlasSprite sprite) {
+		NearAtlas near = nearAtlas;
+		if (near != null && TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
+			near.request(sprite);
+		}
+	}
+
 	public static boolean isNearAtlasActive() {
 		NearAtlas near = nearAtlas;
 		return near != null && near.isUsable();
@@ -1123,6 +1147,10 @@ public final class AtlasPreviewState {
 				if (framePosition < 0 || framePosition >= animation.steps().size()) {
 					logAnimationStateMismatch(atlas, "animation frame index outside cached frame sequence for " + sprite.contents().name());
 					return;
+				}
+				NearAtlas near = nearAtlas;
+				if (near != null) {
+					near.animate(sprite, animation.steps().get(framePosition).frameIndex());
 				}
 				if (animation.lastFramePosition == framePosition
 						&& (!animation.interpolated() || animation.lastSubFrame == subFrame)) {

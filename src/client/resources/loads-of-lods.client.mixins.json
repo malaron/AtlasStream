@@ -17,7 +17,8 @@
 		"SodiumVirtualTextureLayoutMixin",
 		"SodiumWorldRendererMixin",
 		"TextureAtlasAccessor",
-		"TextureAtlasUploadMixin"
+		"TextureAtlasUploadMixin",
+		"VertexConsumerSpriteUsageMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

@@ -184,10 +184,16 @@ public final class SodiumLodBridge {
 	}
 
 	public static com.mojang.renderpearl.api.textures.GpuTextureView lowAtlasForCurrentPass() {
-		if (ACTIVE_LOD.get() == SectionLod.HIGH_RESOLUTION
-				&& AtlasPreviewState.isDistancePreviewEnabled()
+		if (AtlasPreviewState.isDistancePreviewEnabled()
+				&& AtlasPreviewState.isNearAtlasActive()
 				&& isIrisShaderPackInUse()) {
-			return AtlasPreviewState.nearAtlasView();
+			// The atlas texture slot returns the near atlas, so every terrain pass must pick its atlas explicitly.
+			com.mojang.renderpearl.api.textures.GpuTextureView near = ACTIVE_LOD.get() == SectionLod.HIGH_RESOLUTION
+				? AtlasPreviewState.nearAtlasView()
+				: AtlasPreviewState.lowResolutionTextureViewForDistancePreview();
+			if (near != null) {
+				return near;
+			}
 		}
 		if (!useLowResolutionForCurrentPass()) {
 			return null;
