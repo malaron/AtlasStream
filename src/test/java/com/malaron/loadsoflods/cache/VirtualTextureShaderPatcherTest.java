@@ -34,7 +34,7 @@ void main() {
 		assertTrue(patched.contains("loadsOfLodsSampleVirtualOrAtlas(uv, du, dv)"));
 		assertTrue(patched.contains("loadsOfLodsSampleVirtualOrAtlas(sampleUV, dFdx(uv), dFdy(uv))"));
 		assertTrue(patched.contains("atlasSize.y >> level"));
-		assertTrue(patched.contains("if (edgeDistance <= filterRadius)"));
+		assertTrue(patched.contains("clamp(localUv, vec2(filterRadius)"));
 		assertTrue(patched.contains("slotCoordinate * 128"));
 	}
 

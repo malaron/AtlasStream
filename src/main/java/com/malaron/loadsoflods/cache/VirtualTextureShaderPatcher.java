@@ -68,14 +68,9 @@ vec4 loadsOfLodsSampleVirtualOrAtlas(vec2 uv, vec2 du, vec2 dv) {
     vec2 cacheSize;
     if (loadsOfLodsLookupVirtualTile(uv, du, dv, slot, localUv, atlasMipSize, cacheSize)) {
         vec2 tileScale = atlasMipSize / 128.0;
-        float edgeDistance = min(
-            min(localUv.x, localUv.y),
-            min(1.0 - localUv.x, 1.0 - localUv.y)
-        );
         float filterRadius = max(length(du * tileScale), length(dv * tileScale)) * 0.5 + 1.0 / 128.0;
-        if (edgeDistance <= filterRadius) {
-            return textureGrad(u_BlockTex, uv, du, dv);
-        }
+        // Clamp inside the tile rather than falling back to the low atlas, which showed as a grid across big sprites.
+        localUv = clamp(localUv, vec2(filterRadius), vec2(1.0 - filterRadius));
         int cacheGridWidth = int(cacheSize.x) / 128;
         ivec2 slotCoordinate = ivec2(slot % cacheGridWidth, slot / cacheGridWidth);
         vec2 cacheUv = (vec2(slotCoordinate * 128) + localUv * 128.0) / cacheSize;
