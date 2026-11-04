@@ -11,6 +11,7 @@ import dev.isxander.yacl3.api.OptionDescription;
 import dev.isxander.yacl3.api.YetAnotherConfigLib;
 import dev.isxander.yacl3.api.controller.CyclingListControllerBuilder;
 import dev.isxander.yacl3.api.controller.DoubleSliderControllerBuilder;
+import dev.isxander.yacl3.api.controller.IntegerSliderControllerBuilder;
 import dev.isxander.yacl3.api.controller.LongSliderControllerBuilder;
 import dev.isxander.yacl3.api.controller.TickBoxControllerBuilder;
 import net.minecraft.client.gui.screens.Screen;
@@ -24,7 +25,7 @@ final class LodConfigScreen {
 	static Screen create(Screen parent) {
 		LodConfig current = LoadsOfLodsClient.getConfig();
 		LodConfig defaults = new LodConfig(128.0, 16.0, LodConfig.DEFAULT_HIGH_RESOLUTION_CACHE_MIB, LodConfig.DEFAULT_DOWNSCALE_FACTOR);
-		double[] distance = {current.highResolutionDistance()};
+		int[] distanceChunks = {Math.max(1, (int) Math.round(current.highResolutionDistance() / 16.0))};
 		double[] hysteresis = {current.hysteresis()};
 		long[] cacheMiB = {current.highResolutionCacheMiB()};
 		int[] factor = {current.downscaleFactor()};
@@ -42,13 +43,16 @@ final class LodConfigScreen {
 				.formatValue(value -> Component.literal("1:" + value)))
 			.build();
 
-		Option<Double> distanceOption = Option.<Double>createBuilder()
-			.name(Component.literal("High-resolution distance"))
+		Option<Integer> distanceOption = Option.<Integer>createBuilder()
+			.name(Component.literal("High-resolution distance (chunks)"))
 			.description(OptionDescription.of(Component.literal(
-				"Sections closer than this many blocks use full-resolution textures (non-Iris streamed mode)."
+				"Sections within this many chunks use full-resolution textures. Sections switch a whole chunk at a time."
 			)))
-			.binding(defaults.highResolutionDistance(), () -> distance[0], value -> distance[0] = value)
-			.controller(option -> DoubleSliderControllerBuilder.create(option).range(4.0, 512.0).step(2.0))
+			.binding((int) (defaults.highResolutionDistance() / 16.0), () -> distanceChunks[0], value -> distanceChunks[0] = value)
+			.controller(option -> IntegerSliderControllerBuilder.create(option)
+				.range(1, 32)
+				.step(1)
+				.formatValue(value -> Component.literal(value + (value == 1 ? " chunk" : " chunks"))))
 			.build();
 
 		Option<Double> hysteresisOption = Option.<Double>createBuilder()
@@ -92,9 +96,10 @@ final class LodConfigScreen {
 				.build())
 			.save(() -> {
 				try {
+					double distance = distanceChunks[0] * 16.0;
 					LoadsOfLodsClient.updateConfig(new LodConfig(
-						distance[0],
-						Math.min(hysteresis[0], distance[0]),
+						distance,
+						Math.min(hysteresis[0], distance),
 						cacheMiB[0],
 						factor[0],
 						tint[0]
