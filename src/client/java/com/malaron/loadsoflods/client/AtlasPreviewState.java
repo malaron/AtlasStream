@@ -384,6 +384,7 @@ public final class AtlasPreviewState {
 	private static volatile double streamCameraY;
 	private static volatile double streamCameraZ;
 	private static int streamRefreshTicks;
+	private static long streamGeneration = Long.MIN_VALUE;
 
 	private static double sectionDistance(long sectionKey) {
 		double dx = SodiumChunkMeshPriority.sectionX(sectionKey) * 16.0 + 8.0 - streamCameraX;
@@ -398,6 +399,11 @@ public final class AtlasPreviewState {
 			return;
 		}
 		streamRefreshTicks = STREAM_REFRESH_TICKS;
+		if (streamGeneration != generation) {
+			// Requests recorded for an older atlas generation are discarded, so every section must be requested again.
+			streamGeneration = generation;
+			requestedStreamSections.clear();
+		}
 		com.malaron.loadsoflods.lod.LodConfig config = LoadsOfLodsClient.getConfig();
 		double radius = config.highResolutionDistance();
 		if (radius <= 0.0) {
