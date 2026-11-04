@@ -94,6 +94,16 @@ public final class AtlasPreviewState {
 		FabricClientCommandSource source,
 		boolean enableDistancePreview
 	) {
+		buildAndEnable(atlas, resourceManager, source::sendFeedback, source::sendError, enableDistancePreview);
+	}
+
+	public static void buildAndEnable(
+		TextureAtlas atlas,
+		ResourceManager resourceManager,
+		java.util.function.Consumer<net.minecraft.network.chat.Component> feedback,
+		java.util.function.Consumer<net.minecraft.network.chat.Component> errors,
+		boolean enableDistancePreview
+	) {
 		if (!BUILDING.compareAndSet(false, true)) {
 			throw new IllegalStateException("A low-resolution atlas preview build is already running");
 		}
@@ -167,7 +177,7 @@ public final class AtlasPreviewState {
 				if (enableDistancePreview) {
 					SodiumLodBridge.scheduleVisibleTerrainRebuild();
 				}
-				source.sendFeedback(
+				feedback.accept(
 					net.minecraft.network.chat.Component.literal(
 						(enableDistancePreview
 							? SodiumLodBridge.isIrisShaderPackInUse()
@@ -186,7 +196,7 @@ public final class AtlasPreviewState {
 				);
 			} catch (RuntimeException exception) {
 				LoadsOfLods.LOGGER.error("Could not activate low-resolution atlas preview", exception);
-				source.sendError(
+				errors.accept(
 					net.minecraft.network.chat.Component.literal("Low-atlas preview failed: " + exception.getMessage())
 				);
 			} finally {
@@ -306,6 +316,7 @@ public final class AtlasPreviewState {
 	}
 
 	public static synchronized void serviceVirtualTextureRequests() {
+		serviceReloadRebuild();
 		NearAtlas near = nearAtlas;
 		if (near != null) {
 			near.service();
@@ -550,8 +561,47 @@ public final class AtlasPreviewState {
 		return lowResolutionTextureView;
 	}
 
+	// A resource reload restores the full atlas and drops the reduced one. If the distance preview was on, rebuild
+	// it automatically once the reload has settled.
+	private static boolean reloadRebuildPending;
+	private static int reloadRebuildTicks = -1;
+
+	private static void serviceReloadRebuild() {
+		if (reloadRebuildTicks < 0 || reloadRebuildTicks-- > 0) {
+			return;
+		}
+		reloadRebuildTicks = -1;
+		Minecraft client = Minecraft.getInstance();
+		if (BUILDING.get()) {
+			reloadRebuildTicks = 20;
+			return;
+		}
+		reloadRebuildPending = false;
+		if (!(client.getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS) instanceof TextureAtlas atlas)
+				|| !net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("sodium")
+				|| (!SodiumLodBridge.isIrisShaderPackInUse()
+					&& !com.malaron.loadsoflods.cache.VirtualTextureShaderPatcher.isPatchApplied())
+				|| distancePreviewEnabled) {
+			LoadsOfLods.LOGGER.info("Not rebuilding the distance preview after the resource reload; run /lods preview-distance");
+			return;
+		}
+		LoadsOfLods.LOGGER.info("Rebuilding the distance preview after a resource reload");
+		try {
+			buildAndEnable(
+				atlas,
+				client.getResourceManager(),
+				message -> LoadsOfLods.LOGGER.info("{}", message.getString()),
+				message -> LoadsOfLods.LOGGER.error("{}", message.getString()),
+				true
+			);
+		} catch (RuntimeException exception) {
+			LoadsOfLods.LOGGER.error("Could not rebuild the distance preview after a resource reload", exception);
+		}
+	}
+
 	public static synchronized void beforeAtlasReload(TextureAtlas atlas) {
 		if (TextureAtlas.LOCATION_BLOCKS.equals(atlas.location()) && previewedAtlas == atlas) {
+			reloadRebuildPending |= distancePreviewEnabled;
 			lowPreviewEnabled = false;
 			distancePreviewEnabled = false;
 			detachAtlasOwnedLowResolutionTexture();
@@ -566,6 +616,9 @@ public final class AtlasPreviewState {
 		generation++;
 		if (previewedAtlas == atlas) {
 			closeLowResolutionTexture();
+		}
+		if (reloadRebuildPending) {
+			reloadRebuildTicks = 20;
 		}
 	}
 

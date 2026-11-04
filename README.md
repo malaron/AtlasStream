@@ -27,7 +27,7 @@ Iris shaderpack, Sodium solid and cutout sections near the camera sample
 resident high-resolution tiles, and distant sections use the reduced atlas;
 the full high-resolution block-atlas GPU allocation is released. Because
 Minecraft shares this atlas with other block-atlas users, they also see the
-low-resolution fallback in this mode. Reload resource packs to restore the
+low-resolution fallback in this mode. A resource reload restores the
 full-resolution atlas. With an Iris shaderpack active, the reduced atlas (albedo
 plus normal/specular LabPBR maps, averaged per channel to the same ratio) serves
 distant terrain, and a separate full-size *sparse* "near atlas" (needs
@@ -67,7 +67,7 @@ downscaleFactor=4
 `downscaleFactor` (2, 4 or 8) is the per-axis reduction of the low-resolution
 atlas, including Iris's normal/specular atlases. Larger values save more VRAM;
 1:2 uses roughly 4x the atlas VRAM of 1:4. It applies the next time the
-distance preview is built (`/lods preview-distance`), as does
+distance preview is built (it is rebuilt automatically after a resource reload, e.g. F3+T), as does
 `debugTintLowResolution` (tints low-res terrain magenta for testing).
 `highResolutionDistance` is stored in blocks but edited in chunks in the
 config screen; 0 disables near terrain entirely.
@@ -104,14 +104,16 @@ UV preservation. Run
 reloading resource packs after `/lods preview-low`; the generated low atlas
 stays resident for a quick switch back. This low-only preview does not reduce
 total VRAM usage. `/lods preview-distance` instead activates streamed mode and
-releases the original full-resolution block atlas. Reload resource packs to
-leave streamed mode and restore the original atlas. The low atlas and its CPU
+releases the original full-resolution block atlas. A resource reload restores
+the original atlas and then rebuilds streamed mode automatically. The low atlas and its CPU
 mip chain are capped at 1 GiB.
 Mip levels follow the reduced atlas and are generated within each sprite's
 padded bounds to avoid sampling neighboring sprites.
-A resource-pack reload discards the cached low atlas;
-run `/lods preview-distance` again after reloading packs to rebuild the
-distance-preview atlas.
+A resource-pack reload discards the cached low atlas. If the distance preview
+was on, it is rebuilt automatically about a second after the reload (this
+also picks up a changed `downscaleFactor` or debug tint), so no command is
+needed. A manual `/lods preview-distance` is only needed if that rebuild is
+skipped (see `latest.log`).
 Run `/lods preview-distance` to assign solid and cutout Sodium chunk sections
 to the high-resolution tile cache or low-resolution fallback using the
 configured distance and hysteresis. Translucent terrain stays on the low
