@@ -201,6 +201,7 @@ public final class AtlasPreviewState {
 					net.minecraft.network.chat.Component.literal("Low-atlas preview failed: " + exception.getMessage())
 				);
 			} finally {
+				reloadBuildRunning = false;
 				BUILDING.set(false);
 			}
 		}));
@@ -578,12 +579,14 @@ public final class AtlasPreviewState {
 	// True while a reduced rebuild is guaranteed to follow a resource reload, so Iris's full-size blocks PBR atlases
 	// would be built only to be discarded. The rebuild registers reduced maps itself.
 	public static synchronized boolean shouldSkipIrisBlockPbrLoad(TextureAtlas atlas) {
-		return reloadRebuildPending
+		return (reloadRebuildPending || (reloadBuildRunning && BUILDING.get()))
 			&& TextureAtlas.LOCATION_BLOCKS.equals(atlas.location())
 			&& SodiumLodBridge.isIrisShaderPackInUse();
 	}
 
 	private static boolean reloadRebuildPending;
+	// Iris loads PBR atlases lazily, possibly after our rebuild has started, so keep skipping until it finishes.
+	private static boolean reloadBuildRunning;
 	private static int reloadRebuildTicks = -1;
 	private static boolean launchRebuild;
 	private static int launchWaitTicks;
@@ -631,6 +634,7 @@ public final class AtlasPreviewState {
 			return;
 		}
 		LoadsOfLods.LOGGER.info("Rebuilding the distance preview after a resource reload");
+		reloadBuildRunning = true;
 		try {
 			buildAndEnable(
 				atlas,
@@ -644,6 +648,7 @@ public final class AtlasPreviewState {
 			);
 		} catch (RuntimeException exception) {
 			LoadsOfLods.LOGGER.error("Could not rebuild the distance preview after a resource reload", exception);
+			reloadBuildRunning = false;
 			IrisPbrAtlasReducer.resetIrisHolders();
 		}
 	}
