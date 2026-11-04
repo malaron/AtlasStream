@@ -72,9 +72,11 @@ distance preview is built (it is rebuilt automatically after a resource reload, 
 `highResolutionDistance` is stored in blocks but edited in chunks in the
 config screen; 0 disables near terrain entirely.
 `enableOnLaunch` (default `true`) builds the reduced atlas automatically after
-the game starts: it waits until you join a world (Iris creates its pipeline
-then), skips Iris's full-size block PBR load, and builds the reduced atlases
-directly. Set it to `false` to keep using `/lods preview-distance` manually.
+the game starts. With Iris shaders enabled, the CPU build (including the reduced
+PBR images) starts right after the launch resource reload, Iris's full-size block
+PBR load is skipped, and the GPU activation is parked until you join a world and
+Iris has created its pipeline. Without Iris shaders it activates once the first
+terrain shader has compiled. Set it to `false` to keep using `/lods preview-distance` manually.
 
 All settings can be edited in game via Mod Menu (21.0.0 for 26.3) when Yet
 Another Config Lib is installed; both are optional. `/lods vram` prints a VRAM
@@ -141,11 +143,16 @@ model are unit-tested. The GPU page-table texture and bounded 2D tile-atlas
 cache upload mip-complete tiles, update residency entries, and clear entries
 on LRU eviction. This uses a 2D texture because Minecraft's current RenderPearl
 backend does not support texture arrays. Tiles are composed from Minecraft's
-stitched sprite mipmaps; tiles touching animated sprites are rejected until
-animated-tile synchronization is implemented and continue sampling the
-low-resolution fallback. Sodium's chunk shader is patched at compile time to
-sample resident virtual tiles in the high-resolution terrain pass and use the
-low-resolution atlas on cache misses. The original atlas dimensions are
+stitched sprite mipmaps. Tiles touching animated sprites are drawn from the
+sprite's current full-resolution frame and rewritten in place when it changes,
+only for sprites used by sections within the streaming range (up to 8 tile
+rewrites and about 3 ms per tick). Interpolated animations step instead of
+blending. Sodium's chunk shader is patched at compile time to
+sample resident virtual tiles in the high-resolution and translucent terrain
+passes and use the
+low-resolution atlas on cache misses. Mip selection comes from the UV derivatives
+against the original atlas size, and sampling is clamped inside the tile rather
+than falling back at tile edges. The original atlas dimensions are
 supplied separately so page-table lookup remains correct after replacing the
 full atlas with the smaller fallback. Empty fallback bindings are allocated
 during block-atlas reload, not inside Sodium's active render pass. Shader
@@ -167,8 +174,10 @@ atlas mip levels, deduplicates keys, and evicts coarse requests first when full.
 Enabling distance preview schedules loaded Sodium
 terrain for remeshing so already-built sections also generate initial requests.
 `/lods cache` includes a lifetime count of completed UV quads to distinguish
-an empty request queue from a capture hook that is not running. Tiles that touch animated sprites are skipped and
-continue sampling the low-resolution fallback. Requests are based on chunk meshing, not
+an empty request queue from a capture hook that is not running. Without Iris, tiles are
+requested only for sections within `highResolutionDistance + hysteresis + 32` blocks;
+sections that come into range later are requested as the camera moves, and requests are
+renewed after an atlas rebuild. Requests are based on chunk meshing, not
 camera visibility. Requests now carry the squared distance between the meshed
 section center and its captured Sodium build camera: nearby section requests
 are planned first, and repeated requests for a tile upgrade its queue priority
