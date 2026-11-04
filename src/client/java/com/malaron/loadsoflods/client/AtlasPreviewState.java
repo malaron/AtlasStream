@@ -284,6 +284,11 @@ public final class AtlasPreviewState {
 		}
 	}
 
+	public static boolean isNearAtlasWarm() {
+		NearAtlas near = nearAtlas;
+		return near == null || !near.isUsable() || near.isWarm();
+	}
+
 	public static boolean isNearAtlasActive() {
 		NearAtlas near = nearAtlas;
 		return near != null && near.isUsable();

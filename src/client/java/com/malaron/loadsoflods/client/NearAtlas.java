@@ -99,6 +99,10 @@ final class NearAtlas implements AutoCloseable {
 	private int uploadsPerSecond;
 	private int windowTicks;
 	private int failedSprites;
+	private static final long WARM_MIN_NANOS = 1_500_000_000L;
+	private static final long WARM_MAX_NANOS = 15_000_000_000L;
+	private final long createdNanos = System.nanoTime();
+	private volatile boolean warm;
 	private volatile boolean closed;
 	private volatile boolean failed;
 
@@ -424,6 +428,19 @@ final class NearAtlas implements AutoCloseable {
 			}
 		}
 		flushAnimations();
+		if (!warm) {
+			long age = System.nanoTime() - createdNanos;
+			boolean drained = incoming.isEmpty() && jobs.isEmpty() && !requested.isEmpty();
+			if ((drained && age >= WARM_MIN_NANOS) || age >= WARM_MAX_NANOS) {
+				warm = true;
+			}
+		}
+	}
+
+	// False until the sprites needed around the camera have streamed in after creation, so near sections are drawn
+	// from the reduced atlas instead of showing unpopulated (black) pages.
+	boolean isWarm() {
+		return warm;
 	}
 
 	// Render thread only. Queues the albedo re-upload for a resident animated sprite whose displayed frame changed.
