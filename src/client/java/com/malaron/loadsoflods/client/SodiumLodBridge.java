@@ -39,6 +39,7 @@ public final class SodiumLodBridge {
 	private static final String RENDER_LIST_CLASS =
 		"net.caffeinemc.mods.sodium.client.render.chunk.lists.ChunkRenderList";
 	private static final ThreadLocal<SectionLod> ACTIVE_LOD = new ThreadLocal<>();
+	private static final ThreadLocal<Boolean> TRANSLUCENT_PASS = ThreadLocal.withInitial(() -> false);
 	private static final Map<MethodKey, Method> METHODS = new ConcurrentHashMap<>();
 	private static final AtomicBoolean IRIS_STATE_FAILURE_LOGGED = new AtomicBoolean();
 	private static final AtomicBoolean IRIS_SAMPLER_REFRESH_FAILURE_LOGGED = new AtomicBoolean();
@@ -136,7 +137,12 @@ public final class SodiumLodBridge {
 			if (distancePreview && isIrisShaderPackInUse()) {
 				refreshIrisPbrSamplers();
 			}
-			invoke(renderMethod, renderer, arguments);
+			TRANSLUCENT_PASS.set(translucent);
+			try {
+				invoke(renderMethod, renderer, arguments);
+			} finally {
+				TRANSLUCENT_PASS.remove();
+			}
 			return;
 		}
 
@@ -364,7 +370,8 @@ public final class SodiumLodBridge {
 	}
 
 	public static boolean useVirtualTextureForCurrentPass() {
-		return ACTIVE_LOD.get() == SectionLod.HIGH_RESOLUTION
+		SectionLod lod = ACTIVE_LOD.get();
+		return (lod == SectionLod.HIGH_RESOLUTION || (lod == null && TRANSLUCENT_PASS.get()))
 			&& AtlasPreviewState.isDistancePreviewEnabled()
 			&& !isIrisShaderPackInUse();
 	}
