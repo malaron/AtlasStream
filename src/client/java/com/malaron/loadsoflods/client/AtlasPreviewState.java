@@ -270,6 +270,7 @@ public final class AtlasPreviewState {
 		NearAtlas near = nearAtlas;
 		if (near != null && TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
 			near.request(sprite);
+			near.noteAlwaysAnimated(sprite);
 		}
 	}
 
@@ -287,6 +288,7 @@ public final class AtlasPreviewState {
 		NearAtlas near = nearAtlas;
 		if (near != null) {
 			near.request(sprite);
+			near.noteSection(sprite, SodiumChunkMeshPriority.currentSectionKey());
 		}
 		VIRTUAL_TEXTURE_REQUEST_TRACKER.recordSpriteUsage(
 			sprite.getU0(),

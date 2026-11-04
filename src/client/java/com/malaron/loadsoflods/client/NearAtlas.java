@@ -63,6 +63,10 @@ final class NearAtlas implements AutoCloseable {
 		return thread;
 	});
 	private final Set<TextureAtlasSprite> requested = ConcurrentHashMap.newKeySet();
+	private final java.util.Map<TextureAtlasSprite, Set<Long>> sectionUses = new ConcurrentHashMap<>();
+	private final Set<TextureAtlasSprite> alwaysAnimated = ConcurrentHashMap.newKeySet();
+	private volatile Set<TextureAtlasSprite> activeSprites = Set.of();
+	private int activeRefreshTicks;
 	private final ConcurrentLinkedQueue<TextureAtlasSprite> incoming = new ConcurrentLinkedQueue<>();
 	private final List<Job> jobs = new ArrayList<>();
 	private final java.util.Map<TextureAtlasSprite, Geometry> resident = new java.util.HashMap<>();
@@ -160,10 +164,53 @@ final class NearAtlas implements AutoCloseable {
 		}
 	}
 
+	// Safe to call from chunk-build threads. Remembers which sections use an animated sprite.
+	void noteSection(TextureAtlasSprite sprite, long sectionKey) {
+		if (sectionKey != Long.MIN_VALUE && sprite.contents().isAnimated()) {
+			sectionUses.computeIfAbsent(sprite, ignored -> ConcurrentHashMap.newKeySet()).add(sectionKey);
+		}
+	}
+
+	// Safe to call from the render thread for sprites with no section (held blocks).
+	void noteAlwaysAnimated(TextureAtlasSprite sprite) {
+		if (sprite.contents().isAnimated()) {
+			alwaysAnimated.add(sprite);
+		}
+	}
+
+	private void refreshActiveSprites() {
+		double radius = LoadsOfLodsClient.getConfig().highResolutionDistance();
+		Set<TextureAtlasSprite> active = new java.util.HashSet<>(alwaysAnimated);
+		if (radius > 0.0) {
+			var camera = net.minecraft.client.Minecraft.getInstance().gameRenderer.mainCamera().position();
+			// Matches the section policy's hysteresis, plus half a section diagonal.
+			double reach = radius + LoadsOfLodsClient.getConfig().hysteresis() + 16.0;
+			double reachSquared = reach * reach;
+			for (java.util.Map.Entry<TextureAtlasSprite, Set<Long>> entry : sectionUses.entrySet()) {
+				for (long key : entry.getValue()) {
+					double dx = SodiumChunkMeshPriority.sectionX(key) * 16.0 + 8.0 - camera.x;
+					double dy = SodiumChunkMeshPriority.sectionY(key) * 16.0 + 8.0 - camera.y;
+					double dz = SodiumChunkMeshPriority.sectionZ(key) * 16.0 + 8.0 - camera.z;
+					if (dx * dx + dy * dy + dz * dz <= reachSquared) {
+						active.add(entry.getKey());
+						break;
+					}
+				}
+			}
+		} else {
+			active.clear();
+		}
+		activeSprites = active;
+	}
+
 	// Render thread only.
 	void service() {
 		if (closed || failed) {
 			return;
+		}
+		if (activeRefreshTicks-- <= 0) {
+			activeRefreshTicks = 10;
+			refreshActiveSprites();
 		}
 		for (int started = 0; started < MAX_NEW_JOBS_PER_TICK; started++) {
 			TextureAtlasSprite sprite = incoming.poll();
@@ -193,6 +240,10 @@ final class NearAtlas implements AutoCloseable {
 	// PBR maps keep frame 0. Queued work is drained under a time budget in service().
 	void animate(TextureAtlasSprite sprite, int frameIndex, int nextFrameIndex, float nextWeight) {
 		if (closed || failed || !resident.containsKey(sprite)) {
+			return;
+		}
+		if (!activeSprites.contains(sprite)) {
+			pendingFrames.remove(sprite);
 			return;
 		}
 		pendingFrames.put(sprite, new FrameKey(frameIndex, nextFrameIndex, nextWeight));
@@ -288,7 +339,7 @@ final class NearAtlas implements AutoCloseable {
 		return List.of(
 			"Near sparse atlas: " + residentSprites + " sprites resident, " + (jobs.size() + incoming.size())
 				+ " pending, " + failedSprites + " failed",
-			"Near animation: " + uploadsPerSecond + " uploads/s, backlog avg "
+			"Near animation: " + activeSprites.size() + " sprites active, " + uploadsPerSecond + " uploads/s, backlog avg "
 				+ String.format(java.util.Locale.ROOT, "%.0f", averageBacklog) + " peak " + displayedPeak,
 			"Near committed VRAM: " + String.format(java.util.Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024.0))
 				+ (failed ? " (disabled after an error)" : "")
