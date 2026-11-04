@@ -57,7 +57,17 @@ On first launch the mod creates `config/loads-of-lods.properties`:
 highResolutionDistance=128.0
 hysteresis=16.0
 highResolutionCacheMiB=1024
+downscaleFactor=4
 ```
+
+`downscaleFactor` (2, 4 or 8) is the per-axis reduction of the low-resolution
+atlas, including Iris's normal/specular atlases. Larger values save more VRAM;
+1:2 uses roughly 4x the atlas VRAM of 1:4. It applies the next time the
+distance preview is built (`/lods preview-distance`).
+
+All settings can be edited in game via Mod Menu (21.0.0 for 26.3) when Yet
+Another Config Lib is installed; both are optional. `/lods vram` prints a VRAM
+report, and an F3 debug entry shows the current mode, factor and atlas state.
 
 Distances are in blocks. A section is initially classified as high resolution
 when its bounding box is within the configured distance. Once classified, it
