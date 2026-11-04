@@ -6,6 +6,7 @@
 		"AbstractTextureAccessor",
 		"AbstractTexturePreviewMixin",
 		"ChunkVertexConsumerMixin",
+		"GuiItemAtlasMixin",
 		"IrisAtlasPbrLoaderMixin",
 		"IrisPbrAtlasAnimationMixin",
 		"IrisPbrAtlasLookupMixin",
