@@ -82,7 +82,9 @@ final class NearAtlas implements AutoCloseable {
 	private static final long TOUCH_RECENT_NANOS = 2_000_000_000L;
 	private static final long TOUCH_FORGET_NANOS = 60_000_000_000L;
 	private static final long EVICT_GRACE_NANOS = 10_000_000_000L;
-	private static final int MAX_EVICTIONS_PER_REFRESH = 16;
+	private static final int MAX_EVICTIONS_PER_REFRESH = 4;
+	// Decommitting sparse pages is slow in the driver, so release memory gradually rather than in one frame.
+	private static final long EVICT_BUDGET_NANOS = 400_000L;
 	private final ConcurrentLinkedQueue<TextureAtlasSprite> incoming = new ConcurrentLinkedQueue<>();
 	private final List<Job> jobs = new ArrayList<>();
 	private final java.util.Map<TextureAtlasSprite, Geometry> resident = new java.util.HashMap<>();
@@ -315,9 +317,13 @@ final class NearAtlas implements AutoCloseable {
 		}
 		victims.sort(java.util.Comparator.comparingLong(sprite -> lastNeeded.getOrDefault(sprite, now)));
 		int previousBinding = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+		long deadline = System.nanoTime() + EVICT_BUDGET_NANOS;
 		try {
 			for (int i = 0; i < victims.size() && i < MAX_EVICTIONS_PER_REFRESH && (off || committedBytes() > target); i++) {
 				evict(victims.get(i));
+				if (System.nanoTime() >= deadline) {
+					break;
+				}
 			}
 			checkGl("releasing sparse pages");
 		} catch (IllegalStateException exception) {
