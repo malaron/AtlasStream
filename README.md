@@ -71,6 +71,10 @@ distance preview is built (it is rebuilt automatically after a resource reload, 
 `debugTintLowResolution` (tints low-res terrain magenta for testing).
 `highResolutionDistance` is stored in blocks but edited in chunks in the
 config screen; 0 disables near terrain entirely.
+`enableOnLaunch` (default `true`) builds the reduced atlas automatically after
+the game starts: it waits until you join a world (Iris creates its pipeline
+then), skips Iris's full-size block PBR load, and builds the reduced atlases
+directly. Set it to `false` to keep using `/lods preview-distance` manually.
 
 All settings can be edited in game via Mod Menu (21.0.0 for 26.3) when Yet
 Another Config Lib is installed; both are optional. `/lods vram` prints a VRAM

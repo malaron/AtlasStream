@@ -30,6 +30,16 @@ final class LodConfigScreen {
 		long[] cacheMiB = {current.highResolutionCacheMiB()};
 		int[] factor = {current.downscaleFactor()};
 		boolean[] tint = {current.debugTintLowResolution()};
+		boolean[] onLaunch = {current.enableOnLaunch()};
+
+		Option<Boolean> onLaunchOption = Option.<Boolean>createBuilder()
+			.name(Component.literal("Enable on launch"))
+			.description(OptionDescription.of(Component.literal(
+				"Build the reduced atlas automatically after the game starts, once you join a world, so you don't need /lods preview-distance. Takes effect next launch."
+			)))
+			.binding(true, () -> onLaunch[0], value -> onLaunch[0] = value)
+			.controller(TickBoxControllerBuilder::create)
+			.build();
 
 		Option<Integer> factorOption = Option.<Integer>createBuilder()
 			.name(Component.literal("Texture reduction"))
@@ -93,6 +103,7 @@ final class LodConfigScreen {
 				.option(hysteresisOption)
 				.option(cacheOption)
 				.option(tintOption)
+				.option(onLaunchOption)
 				.build())
 			.save(() -> {
 				try {
@@ -102,9 +113,9 @@ final class LodConfigScreen {
 						distance > 0.0 ? Math.min(hysteresis[0], distance) : hysteresis[0],
 						cacheMiB[0],
 						factor[0],
-						tint[0]
-					));
-				} catch (RuntimeException exception) {
+						tint[0],
+						onLaunch[0]
+					));				} catch (RuntimeException exception) {
 					LoadsOfLods.LOGGER.error("Could not save Loads of Lods settings", exception);
 				}
 			})

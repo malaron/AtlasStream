@@ -47,5 +47,8 @@ public class LoadsOfLodsClient implements ClientModInitializer {
 			config.hysteresis(),
 			config.highResolutionCacheMiB()
 		);
+		if (config.enableOnLaunch()) {
+			AtlasPreviewState.armLaunchRebuild();
+		}
 	}
 }

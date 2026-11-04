@@ -585,6 +585,22 @@ public final class AtlasPreviewState {
 
 	private static boolean reloadRebuildPending;
 	private static int reloadRebuildTicks = -1;
+	private static boolean launchRebuild;
+	private static int launchWaitTicks;
+	private static final int LAUNCH_WAIT_LIMIT_TICKS = 1200;
+
+	// Treat the first atlas load like a reload of an enabled preview: the rebuild runs once a world has been joined
+	// and the shaderpack pipeline exists.
+	public static synchronized void armLaunchRebuild() {
+		reloadRebuildPending = true;
+		launchRebuild = true;
+	}
+
+	private static boolean previewPrerequisitesMet() {
+		return net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("sodium")
+			&& (SodiumLodBridge.isIrisShaderPackInUse()
+				|| com.malaron.loadsoflods.cache.VirtualTextureShaderPatcher.isPatchApplied());
+	}
 
 	private static void serviceReloadRebuild() {
 		if (reloadRebuildTicks < 0 || reloadRebuildTicks-- > 0) {
@@ -595,6 +611,15 @@ public final class AtlasPreviewState {
 		if (BUILDING.get()) {
 			reloadRebuildTicks = 20;
 			return;
+		}
+		if (launchRebuild) {
+			// Iris only creates its pipeline when a world is rendered, so wait for that before giving up.
+			boolean ready = client.level != null && previewPrerequisitesMet();
+			if (!ready && (client.level == null || launchWaitTicks++ < LAUNCH_WAIT_LIMIT_TICKS)) {
+				reloadRebuildTicks = 20;
+				return;
+			}
+			launchRebuild = false;
 		}
 		reloadRebuildPending = false;
 		if (!(client.getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS) instanceof TextureAtlas atlas)

@@ -7,7 +7,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Properties;
 
-public record LodConfig(double highResolutionDistance, double hysteresis, long highResolutionCacheMiB, int downscaleFactor, boolean debugTintLowResolution) {
+public record LodConfig(
+	double highResolutionDistance,
+	double hysteresis,
+	long highResolutionCacheMiB,
+	int downscaleFactor,
+	boolean debugTintLowResolution,
+	boolean enableOnLaunch
+) {
 	private static final double DEFAULT_HIGH_RESOLUTION_DISTANCE = 128.0;
 	private static final double DEFAULT_HYSTERESIS = 16.0;
 	public static final long DEFAULT_HIGH_RESOLUTION_CACHE_MIB = 1024;
@@ -21,6 +28,16 @@ public record LodConfig(double highResolutionDistance, double hysteresis, long h
 
 	public LodConfig(double highResolutionDistance, double hysteresis, long highResolutionCacheMiB, int downscaleFactor) {
 		this(highResolutionDistance, hysteresis, highResolutionCacheMiB, downscaleFactor, false);
+	}
+
+	public LodConfig(
+		double highResolutionDistance,
+		double hysteresis,
+		long highResolutionCacheMiB,
+		int downscaleFactor,
+		boolean debugTintLowResolution
+	) {
+		this(highResolutionDistance, hysteresis, highResolutionCacheMiB, downscaleFactor, debugTintLowResolution, true);
 	}
 
 	public LodConfig {
@@ -61,7 +78,8 @@ public record LodConfig(double highResolutionDistance, double hysteresis, long h
 			readNumber(properties, "hysteresis", DEFAULT_HYSTERESIS),
 			readLong(properties, "highResolutionCacheMiB", DEFAULT_HIGH_RESOLUTION_CACHE_MIB),
 			(int) readLong(properties, "downscaleFactor", DEFAULT_DOWNSCALE_FACTOR),
-			Boolean.parseBoolean(properties.getProperty("debugTintLowResolution", "false").trim())
+			Boolean.parseBoolean(properties.getProperty("debugTintLowResolution", "false").trim()),
+			Boolean.parseBoolean(properties.getProperty("enableOnLaunch", "true").trim())
 		);
 		if (!Files.exists(file)) {
 			save(file, config);
@@ -100,6 +118,7 @@ public record LodConfig(double highResolutionDistance, double hysteresis, long h
 		properties.setProperty("highResolutionCacheMiB", Long.toString(config.highResolutionCacheMiB()));
 		properties.setProperty("downscaleFactor", Integer.toString(config.downscaleFactor()));
 		properties.setProperty("debugTintLowResolution", Boolean.toString(config.debugTintLowResolution()));
+		properties.setProperty("enableOnLaunch", Boolean.toString(config.enableOnLaunch()));
 		try {
 			Path parent = file.getParent();
 			if (parent != null) {
