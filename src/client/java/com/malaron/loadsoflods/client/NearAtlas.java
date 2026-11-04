@@ -172,6 +172,12 @@ final class NearAtlas implements AutoCloseable {
 		}
 	}
 
+	void clearSection(long sectionKey) {
+		for (Set<Long> keys : sectionUses.values()) {
+			keys.remove(sectionKey);
+		}
+	}
+
 	// Safe to call from the render thread for sprites with no section (held blocks).
 	void noteAlwaysAnimated(TextureAtlasSprite sprite) {
 		if (sprite.contents().isAnimated()) {
@@ -352,16 +358,20 @@ final class NearAtlas implements AutoCloseable {
 
 	List<String> debugLines() {
 		long bytes = albedo.committedBytes + normal.committedBytes + specular.committedBytes;
-		return List.of(
+		List<String> names = activeSprites.stream().map(s -> s.contents().name().getPath()
+			+ (alwaysAnimated.contains(s) ? "*" : "")).sorted().toList();
+		List<String> lines = new java.util.ArrayList<>(List.of(
 			"Near sparse atlas: " + residentSprites + " sprites resident, " + (jobs.size() + incoming.size())
 				+ " pending, " + failedSprites + " failed",
 			"Near animation: " + activeSprites.size() + " sprites active, " + uploadsPerSecond + " uploads/s, backlog avg "
-				+ String.format(java.util.Locale.ROOT, "%.0f", averageBacklog) + " peak " + displayedPeak,
-			"Active: " + activeSprites.stream().limit(8).map(s -> s.contents().name().getPath()
-				+ (alwaysAnimated.contains(s) ? "*" : "")).sorted().toList() + " (*=always)",
-			"Near committed VRAM: " + String.format(java.util.Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024.0))
-				+ (failed ? " (disabled after an error)" : "")
-		);
+				+ String.format(java.util.Locale.ROOT, "%.0f", averageBacklog) + " peak " + displayedPeak
+		));
+		for (int i = 0; i < names.size() && i < 24; i += 4) {
+			lines.add("  " + String.join(", ", names.subList(i, Math.min(names.size(), i + 4))));
+		}
+		lines.add("Near committed VRAM: " + String.format(java.util.Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024.0))
+			+ (failed ? " (disabled after an error)" : ""));
+		return lines;
 	}
 
 	private void startJob(TextureAtlasSprite sprite) {

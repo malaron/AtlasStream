@@ -21,11 +21,13 @@ public final class SodiumChunkMeshPriority {
 		try {
 			TaskAccess access = accessFor(task.getClass());
 			Object section = access.renderSection().invoke(task);
-			SECTION_KEY.set(packSection(
+			long sectionKey = packSection(
 				Math.floorDiv(invokeNumber(access.sectionCenterX(), section).intValue(), 16),
 				Math.floorDiv(invokeNumber(access.sectionCenterY(), section).intValue(), 16),
 				Math.floorDiv(invokeNumber(access.sectionCenterZ(), section).intValue(), 16)
-			));
+			);
+			SECTION_KEY.set(sectionKey);
+			AtlasPreviewState.clearSectionSpriteUsage(sectionKey);
 			Object camera = access.absoluteCameraPosition().invoke(task);
 			double deltaX = invokeNumber(access.cameraX(), camera).doubleValue()
 				- invokeNumber(access.sectionCenterX(), section).doubleValue();

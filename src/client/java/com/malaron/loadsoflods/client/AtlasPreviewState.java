@@ -300,6 +300,13 @@ public final class AtlasPreviewState {
 		);
 	}
 
+	public static void clearSectionSpriteUsage(long sectionKey) {
+		NearAtlas near = nearAtlas;
+		if (near != null) {
+			near.clearSection(sectionKey);
+		}
+	}
+
 	public static synchronized void serviceVirtualTextureRequests() {
 		NearAtlas near = nearAtlas;
 		if (near != null) {
