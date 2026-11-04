@@ -104,27 +104,77 @@ final class IrisPbrAtlasReducer {
 	// Returns the PBR atlas objects that now own reduced textures, so Iris's full-size animation uploads can be skipped.
 	static List<Object> apply(Object holder, GpuTexture reducedAlbedo, Images images, int factor) {
 		List<Object> reduced = new ArrayList<>();
-		if (holder == null) {
-			LoadsOfLods.LOGGER.info("Iris had not loaded PBR maps for the block atlas; nothing to reduce");
-			return reduced;
-		}
-		try {
-			Class<?> holderInterface = Class.forName(
-				"net.irisshaders.iris.pbr.texture.PBRTextureHolder",
-				false,
-				IrisPbrAtlasReducer.class.getClassLoader()
-			);
+		if (holder != null) {
 			try {
-				swap(holderInterface.getMethod("normalTexture").invoke(holder), images.normal(), factor, "normal", reduced);
-				swap(holderInterface.getMethod("specularTexture").invoke(holder), images.specular(), factor, "specular", reduced);
-			} finally {
-				int newId = (Integer) reducedAlbedo.getClass().getMethod("iris$getGlId").invoke(reducedAlbedo);
-				irisHolders(irisManager()).put(newId, holder);
+				Class<?> holderInterface = Class.forName(
+					"net.irisshaders.iris.pbr.texture.PBRTextureHolder",
+					false,
+					IrisPbrAtlasReducer.class.getClassLoader()
+				);
+				try {
+					swap(holderInterface.getMethod("normalTexture").invoke(holder), images.normal(), factor, "normal", reduced);
+					swap(holderInterface.getMethod("specularTexture").invoke(holder), images.specular(), factor, "specular", reduced);
+				} finally {
+					irisHolders(irisManager()).put(glId(reducedAlbedo), holder);
+				}
+			} catch (ReflectiveOperationException | RuntimeException exception) {
+				LoadsOfLods.LOGGER.error("Could not reduce Iris PBR atlases", exception);
 			}
-		} catch (ReflectiveOperationException | RuntimeException exception) {
-			LoadsOfLods.LOGGER.error("Could not reduce Iris PBR atlases", exception);
+		}
+		if (reduced.isEmpty()) {
+			// Iris had no full-size maps to shrink (its load was skipped, or not done yet): provide the reduced ones directly.
+			try {
+				AbstractTexture normal = createReduced("normal", images.normal());
+				AbstractTexture specular = createReduced("specular", images.specular());
+				registerHolder(glId(reducedAlbedo), normal, specular);
+				reduced.add(normal);
+				reduced.add(specular);
+				LoadsOfLods.LOGGER.info("Registered reduced Iris PBR maps directly (Iris full-size load was skipped or absent)");
+			} catch (ReflectiveOperationException | RuntimeException exception) {
+				LoadsOfLods.LOGGER.error("Could not register reduced Iris PBR maps", exception);
+			}
 		}
 		return reduced;
+	}
+
+	private static int glId(GpuTexture texture) throws ReflectiveOperationException {
+		return (Integer) texture.getClass().getMethod("iris$getGlId").invoke(texture);
+	}
+
+	private static AbstractTexture createReduced(String label, List<NativeImage> mips) {
+		var device = RenderSystem.getDevice();
+		GpuTexture texture = device.createTexture(
+			"Loads of Lods reduced PBR " + label + " atlas",
+			GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING
+				| GpuTexture.USAGE_RENDER_ATTACHMENT,
+			com.mojang.renderpearl.api.GpuFormat.RGBA8_UNORM,
+			mips.get(0).getWidth(),
+			mips.get(0).getHeight(),
+			1,
+			mips.size()
+		);
+		GpuTextureView view = null;
+		try {
+			view = device.createTextureView(texture);
+			var encoder = device.createCommandEncoder();
+			for (int level = 0; level < mips.size(); level++) {
+				encoder.writeToTexture(texture, mips.get(level), level, 0, 0, 0);
+			}
+			encoder.submit();
+		} catch (RuntimeException | Error exception) {
+			if (view != null) {
+				view.close();
+			}
+			texture.close();
+			throw exception;
+		}
+		AbstractTexture wrapper = new ReducedPbrTexture();
+		((AbstractTextureAccessor) wrapper).loadsOfLods$setTexture(texture);
+		((AbstractTextureAccessor) wrapper).loadsOfLods$setTextureView(view);
+		return wrapper;
+	}
+
+	private static final class ReducedPbrTexture extends AbstractTexture {
 	}
 
 	private static void swap(Object pbrAtlas, List<NativeImage> mips, int factor, String label, List<Object> reduced) {
@@ -314,6 +364,16 @@ final class IrisPbrAtlasReducer {
 			irisHolders(irisManager()).put(albedoGlId, holder);
 		} catch (ReflectiveOperationException | RuntimeException exception) {
 			LoadsOfLods.LOGGER.error("Could not register sparse PBR maps with Iris", exception);
+		}
+	}
+
+	// Makes Iris discard its PBR holders so it loads full-size maps again on demand.
+	static void resetIrisHolders() {
+		try {
+			Object manager = irisManager();
+			manager.getClass().getMethod("clear").invoke(manager);
+		} catch (ReflectiveOperationException | RuntimeException exception) {
+			LoadsOfLods.LOGGER.warn("Could not reset Iris PBR holders", exception);
 		}
 	}
 

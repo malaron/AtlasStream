@@ -564,6 +564,14 @@ public final class AtlasPreviewState {
 
 	// A resource reload restores the full atlas and drops the reduced one. If the distance preview was on, rebuild
 	// it automatically once the reload has settled.
+	// True while a reduced rebuild is guaranteed to follow a resource reload, so Iris's full-size blocks PBR atlases
+	// would be built only to be discarded. The rebuild registers reduced maps itself.
+	public static synchronized boolean shouldSkipIrisBlockPbrLoad(TextureAtlas atlas) {
+		return reloadRebuildPending
+			&& TextureAtlas.LOCATION_BLOCKS.equals(atlas.location())
+			&& SodiumLodBridge.isIrisShaderPackInUse();
+	}
+
 	private static boolean reloadRebuildPending;
 	private static int reloadRebuildTicks = -1;
 
@@ -592,11 +600,15 @@ public final class AtlasPreviewState {
 				atlas,
 				client.getResourceManager(),
 				message -> LoadsOfLods.LOGGER.info("{}", message.getString()),
-				message -> LoadsOfLods.LOGGER.error("{}", message.getString()),
+				message -> {
+					LoadsOfLods.LOGGER.error("{}", message.getString());
+					IrisPbrAtlasReducer.resetIrisHolders();
+				},
 				true
 			);
 		} catch (RuntimeException exception) {
 			LoadsOfLods.LOGGER.error("Could not rebuild the distance preview after a resource reload", exception);
+			IrisPbrAtlasReducer.resetIrisHolders();
 		}
 	}
 
