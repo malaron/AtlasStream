@@ -96,7 +96,8 @@ final class LodConfigScreen {
 						distance[0],
 						Math.min(hysteresis[0], distance[0]),
 						cacheMiB[0],
-						factor[0]
+						factor[0],
+						tint[0]
 					));
 				} catch (RuntimeException exception) {
 					LoadsOfLods.LOGGER.error("Could not save Loads of Lods settings", exception);
