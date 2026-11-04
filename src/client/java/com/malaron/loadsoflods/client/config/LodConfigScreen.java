@@ -25,7 +25,7 @@ final class LodConfigScreen {
 	static Screen create(Screen parent) {
 		LodConfig current = LoadsOfLodsClient.getConfig();
 		LodConfig defaults = new LodConfig(128.0, 16.0, LodConfig.DEFAULT_HIGH_RESOLUTION_CACHE_MIB, LodConfig.DEFAULT_DOWNSCALE_FACTOR);
-		int[] distanceChunks = {Math.max(1, (int) Math.round(current.highResolutionDistance() / 16.0))};
+		int[] distanceChunks = {(int) Math.round(current.highResolutionDistance() / 16.0)};
 		double[] hysteresis = {current.hysteresis()};
 		long[] cacheMiB = {current.highResolutionCacheMiB()};
 		int[] factor = {current.downscaleFactor()};
@@ -46,13 +46,13 @@ final class LodConfigScreen {
 		Option<Integer> distanceOption = Option.<Integer>createBuilder()
 			.name(Component.literal("High-resolution distance (chunks)"))
 			.description(OptionDescription.of(Component.literal(
-				"Sections within this many chunks use full-resolution textures. Sections switch a whole chunk at a time."
+				"Sections within this many chunks use full-resolution textures. Sections switch a whole chunk at a time. 0 uses the reduced textures everywhere, handy for comparing."
 			)))
 			.binding((int) (defaults.highResolutionDistance() / 16.0), () -> distanceChunks[0], value -> distanceChunks[0] = value)
 			.controller(option -> IntegerSliderControllerBuilder.create(option)
-				.range(1, 32)
+				.range(0, 32)
 				.step(1)
-				.formatValue(value -> Component.literal(value + (value == 1 ? " chunk" : " chunks"))))
+				.formatValue(value -> Component.literal(value == 0 ? "Off" : value + (value == 1 ? " chunk" : " chunks"))))
 			.build();
 
 		Option<Double> hysteresisOption = Option.<Double>createBuilder()

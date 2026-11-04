@@ -44,6 +44,7 @@ final class NearAtlas implements AutoCloseable {
 	private static final int DEFAULT_SPECULAR = 0;
 	private static final int MAX_NEW_JOBS_PER_TICK = 8;
 	private static final int MAX_UPLOADS_PER_TICK = 8;
+	private static final long ANIMATION_BUDGET_NANOS = 2_000_000L;
 
 	private final int width;
 	private final int height;
@@ -64,6 +65,7 @@ final class NearAtlas implements AutoCloseable {
 	private final List<Job> jobs = new ArrayList<>();
 	private final java.util.Map<TextureAtlasSprite, Geometry> resident = new java.util.HashMap<>();
 	private final java.util.Map<TextureAtlasSprite, Integer> lastFrame = new java.util.HashMap<>();
+	private final java.util.LinkedHashMap<TextureAtlasSprite, Integer> pendingFrames = new java.util.LinkedHashMap<>();
 	private int residentSprites;
 	private int failedSprites;
 	private volatile boolean closed;
@@ -175,25 +177,46 @@ final class NearAtlas implements AutoCloseable {
 				return;
 			}
 		}
+		flushAnimations();
 	}
 
-	// Render thread only. Re-uploads the albedo for a resident animated sprite when its frame changed. PBR maps keep frame 0.
+	// Render thread only. Queues the albedo re-upload for a resident animated sprite whose frame changed.
+	// PBR maps keep frame 0. Queued work is drained under a time budget in service().
 	void animate(TextureAtlasSprite sprite, int frameIndex) {
-		if (closed || failed) {
+		if (closed || failed || !resident.containsKey(sprite)) {
 			return;
 		}
-		Geometry geometry = resident.get(sprite);
-		if (geometry == null || lastFrame.getOrDefault(sprite, -1) == frameIndex) {
+		if (lastFrame.getOrDefault(sprite, 0) == frameIndex) {
+			pendingFrames.remove(sprite);
+		} else {
+			pendingFrames.put(sprite, frameIndex);
+		}
+	}
+
+	private void flushAnimations() {
+		if (pendingFrames.isEmpty()) {
 			return;
 		}
-		lastFrame.put(sprite, frameIndex);
+		long deadline = System.nanoTime() + ANIMATION_BUDGET_NANOS;
+		List<List<LevelData>> batch = new ArrayList<>();
+		List<TextureAtlasSprite> done = new ArrayList<>();
 		try {
-			write(albedo, albedoLevels(sprite, geometry, frameIndex));
+			for (java.util.Map.Entry<TextureAtlasSprite, Integer> entry : pendingFrames.entrySet()) {
+				if (!batch.isEmpty() && System.nanoTime() > deadline) {
+					break;
+				}
+				batch.add(albedoLevels(entry.getKey(), resident.get(entry.getKey()), entry.getValue()));
+				lastFrame.put(entry.getKey(), entry.getValue());
+				done.add(entry.getKey());
+			}
+			writeAll(albedo, batch);
 		} catch (RuntimeException exception) {
-			LoadsOfLods.LOGGER.error("Could not animate near sprite {}", sprite.contents().name(), exception);
+			LoadsOfLods.LOGGER.error("Could not animate near sprites", exception);
 			if (exception instanceof IllegalStateException) {
 				failed = true;
 			}
+		} finally {
+			done.forEach(pendingFrames::remove);
 		}
 	}
 
@@ -355,6 +378,10 @@ final class NearAtlas implements AutoCloseable {
 	}
 
 	private void write(Layer layer, List<LevelData> levels) {
+		writeAll(layer, List.of(levels));
+	}
+
+	private void writeAll(Layer layer, List<List<LevelData>> batch) {
 		int previousBinding = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
 		int alignment = GL11.glGetInteger(GL11.GL_UNPACK_ALIGNMENT);
 		int rowLength = GL11.glGetInteger(GL11.GL_UNPACK_ROW_LENGTH);
@@ -367,20 +394,22 @@ final class NearAtlas implements AutoCloseable {
 			GL11.glPixelStorei(GL11.GL_UNPACK_ROW_LENGTH, 0);
 			GL11.glPixelStorei(GL11.GL_UNPACK_SKIP_PIXELS, 0);
 			GL11.glPixelStorei(GL11.GL_UNPACK_SKIP_ROWS, 0);
-			for (LevelData data : levels) {
-				commit(layer, data);
-				ByteBuffer buffer = MemoryUtil.memAlloc(data.width * data.height * 4);
-				try {
-					IntBuffer ints = buffer.asIntBuffer();
-					for (int pixel : data.argb) {
-						ints.put((pixel & 0xFF00FF00) | ((pixel >> 16) & 0xFF) | ((pixel & 0xFF) << 16));
+			for (List<LevelData> levels : batch) {
+				for (LevelData data : levels) {
+					commit(layer, data);
+					ByteBuffer buffer = MemoryUtil.memAlloc(data.width * data.height * 4);
+					try {
+						IntBuffer ints = buffer.asIntBuffer();
+						for (int pixel : data.argb) {
+							ints.put((pixel & 0xFF00FF00) | ((pixel >> 16) & 0xFF) | ((pixel & 0xFF) << 16));
+						}
+						GL11.glTexSubImage2D(
+							GL11.GL_TEXTURE_2D, data.level, data.x, data.y, data.width, data.height,
+							GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, buffer
+						);
+					} finally {
+						MemoryUtil.memFree(buffer);
 					}
-					GL11.glTexSubImage2D(
-						GL11.GL_TEXTURE_2D, data.level, data.x, data.y, data.width, data.height,
-						GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, buffer
-					);
-				} finally {
-					MemoryUtil.memFree(buffer);
 				}
 			}
 			checkGl("uploading a near sprite");

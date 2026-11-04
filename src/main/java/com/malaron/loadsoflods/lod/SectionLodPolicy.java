@@ -18,6 +18,9 @@ public final class SectionLodPolicy {
 		LodConfig config
 	) {
 		Objects.requireNonNull(config, "config");
+		if (config.highResolutionDistance() <= 0.0) {
+			return SectionLod.LOW_RESOLUTION;
+		}
 		return distanceToSection(sectionX, sectionY, sectionZ, cameraX, cameraY, cameraZ)
 			<= config.highResolutionDistance()
 			? SectionLod.HIGH_RESOLUTION
@@ -36,6 +39,9 @@ public final class SectionLodPolicy {
 	) {
 		Objects.requireNonNull(currentLevel, "currentLevel");
 		Objects.requireNonNull(config, "config");
+		if (config.highResolutionDistance() <= 0.0) {
+			return SectionLod.LOW_RESOLUTION;
+		}
 		double distance = distanceToSection(sectionX, sectionY, sectionZ, cameraX, cameraY, cameraZ);
 		double boundary = config.highResolutionDistance();
 		double hysteresis = config.hysteresis();

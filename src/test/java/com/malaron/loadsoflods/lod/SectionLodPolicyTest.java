@@ -8,6 +8,16 @@ class SectionLodPolicyTest {
 	private static final LodConfig CONFIG = new LodConfig(128.0, 16.0, 1024);
 
 	@Test
+	void zeroDistanceKeepsEverySectionLowResolution() {
+		LodConfig off = new LodConfig(0.0, 0.0, 1024);
+		assertEquals(SectionLod.LOW_RESOLUTION, SectionLodPolicy.initialLevel(0, 0, 0, 8.0, 8.0, 8.0, off));
+		assertEquals(
+			SectionLod.LOW_RESOLUTION,
+			SectionLodPolicy.updateLevel(SectionLod.HIGH_RESOLUTION, 0, 0, 0, 8.0, 8.0, 8.0, off)
+		);
+	}
+
+	@Test
 	void measuresDistanceToSectionBounds() {
 		assertEquals(
 			SectionLod.HIGH_RESOLUTION,

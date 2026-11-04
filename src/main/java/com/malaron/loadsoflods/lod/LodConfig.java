@@ -27,8 +27,8 @@ public record LodConfig(double highResolutionDistance, double hysteresis, long h
 		if (downscaleFactor != 2 && downscaleFactor != 4 && downscaleFactor != 8) {
 			throw new IllegalArgumentException("Downscale factor must be 2, 4 or 8");
 		}
-		if (!Double.isFinite(highResolutionDistance) || highResolutionDistance <= 0.0) {
-			throw new IllegalArgumentException("High-resolution distance must be a finite positive number");
+		if (!Double.isFinite(highResolutionDistance) || highResolutionDistance < 0.0) {
+			throw new IllegalArgumentException("High-resolution distance must be a finite, non-negative number (0 disables near textures)");
 		}
 		if (!Double.isFinite(hysteresis) || hysteresis < 0.0 || hysteresis > highResolutionDistance) {
 			throw new IllegalArgumentException(
