@@ -199,22 +199,22 @@ final class IrisPbrAtlasReducer {
 					atlas.setPixel(x, y, defaultPixel);
 				}
 			}
-			int[] samples = new int[factor * factor];
-			for (SpriteRegion region : regions) {
+			// Sprites occupy disjoint atlas regions, so they can be decoded and averaged in parallel.
+			regions.parallelStream().forEach(region -> {
 				Identifier id = Identifier.fromNamespaceAndPath(
 					region.identifier().getNamespace(),
 					"textures/" + region.identifier().getPath() + suffix + ".png"
 				);
 				Optional<Resource> resource = resourceManager.getResource(id);
 				if (resource.isEmpty()) {
-					continue;
+					return;
 				}
 				try (InputStream input = resource.get().open(); NativeImage source = NativeImage.read(input)) {
-					writeSprite(atlas, source, region, factor, samples, averager);
+					writeSprite(atlas, source, region, factor, new int[factor * factor], averager);
 				} catch (IOException | RuntimeException exception) {
 					LoadsOfLods.LOGGER.warn("Leaving PBR sprite {} at its default: {}", id, exception.getMessage());
 				}
-			}
+			});
 			List<SpriteRegion> lowRegions = regions.stream()
 				.map(region -> AtlasPreviewState.scaleRegion(region, factor))
 				.toList();

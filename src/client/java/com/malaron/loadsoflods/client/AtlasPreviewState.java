@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.imageio.ImageIO;
 
@@ -726,13 +727,14 @@ public final class AtlasPreviewState {
 			List<SpriteRegion> lowRegions = regions.stream()
 				.map(region -> scaleRegion(region, downscaleFactor))
 				.toList();
-			int loadedSprites = 0;
-			int skippedSprites = 0;
-			int animatedSprites = 0;
-			int animatedSpritesCached = 0;
-			for (SpriteRegion region : regions) {
+			AtomicInteger loadedSprites = new AtomicInteger();
+			AtomicInteger skippedSprites = new AtomicInteger();
+			AtomicInteger animatedSprites = new AtomicInteger();
+			AtomicInteger animatedSpritesCached = new AtomicInteger();
+			// Sprites occupy disjoint atlas regions, so decoding and writing them in parallel is safe.
+			regions.parallelStream().forEach(region -> {
 				if (region.animated()) {
-					animatedSprites++;
+					animatedSprites.incrementAndGet();
 				}
 				try {
 					Identifier textureId = Identifier.fromNamespaceAndPath(
@@ -771,32 +773,35 @@ public final class AtlasPreviewState {
 							);
 						}
 						if (region.animated()) {
-							AnimatedSpriteData animation = createAnimatedSpriteData(
-								resource,
-								source,
-								region,
-								downscaleFactor,
-								lowMipLevelCount,
-								totalImageBytes
-							);
-							if (animation != null) {
-								animatedSpriteData.add(animation);
-								animatedSpritesCached++;
+							// Shares the byte budget and result list, so only these few sprites are serialised.
+							synchronized (animatedSpriteData) {
+								AnimatedSpriteData animation = createAnimatedSpriteData(
+									resource,
+									source,
+									region,
+									downscaleFactor,
+									lowMipLevelCount,
+									totalImageBytes
+								);
+								if (animation != null) {
+									animatedSpriteData.add(animation);
+									animatedSpritesCached.incrementAndGet();
+								}
 							}
 						}
 					} finally {
 						source.flush();
 					}
-					loadedSprites++;
+					loadedSprites.incrementAndGet();
 				} catch (IOException | RuntimeException exception) {
-					skippedSprites++;
+					skippedSprites.incrementAndGet();
 					LoadsOfLods.LOGGER.warn(
 						"Leaving atlas preview sprite {} unchanged because its source could not be read: {}",
 						region.identifier(),
 						exception.getMessage()
 					);
 				}
-			}
+			});
 			for (int level = 1; level < lowMipLevelCount; level++) {
 				mipLevels.add(createMipLevel(mipLevels.get(level - 1), lowRegions, level));
 			}
@@ -825,10 +830,10 @@ public final class AtlasPreviewState {
 				lowAtlasWidth,
 				lowAtlasHeight,
 				downscaleFactor,
-				loadedSprites,
-				skippedSprites,
-				animatedSpritesCached,
-				animatedSprites,
+				loadedSprites.get(),
+				skippedSprites.get(),
+				animatedSpritesCached.get(),
+				animatedSprites.get(),
 				lowMipLevelCount,
 				pbrImages != null ? "reduced" : "unchanged"
 			);
