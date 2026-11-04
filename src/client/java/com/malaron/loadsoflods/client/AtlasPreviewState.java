@@ -349,6 +349,19 @@ public final class AtlasPreviewState {
 		NearAtlas near = nearAtlas;
 		if (near != null) {
 			near.noteTerrainSprite(sprite, SodiumChunkMeshPriority.currentSectionKey());
+		} else {
+			long sectionKey = SodiumChunkMeshPriority.currentSectionKey();
+			if (sectionKey != Long.MIN_VALUE) {
+				// Streaming every sprite of every meshed section floods the tile queue; only sections near the
+				// camera are requested, and refreshStreamedSections() requests the rest as they come into range.
+				streamSections.computeIfAbsent(sectionKey, ignored -> java.util.concurrent.ConcurrentHashMap.newKeySet())
+					.add(sprite);
+				double reach = streamReach;
+				if (reach < 0.0 || sectionDistance(sectionKey) - SECTION_RADIUS > reach) {
+					return;
+				}
+				requestedStreamSections.add(sectionKey);
+			}
 		}
 		VIRTUAL_TEXTURE_REQUEST_TRACKER.recordSpriteUsage(
 			sprite.getU0(),
@@ -360,11 +373,76 @@ public final class AtlasPreviewState {
 		);
 	}
 
+	private static final double SECTION_RADIUS = 14.0;
+	private static final double STREAM_PREFETCH_BLOCKS = 32.0;
+	private static final int STREAM_REFRESH_TICKS = 5;
+	private static final java.util.Map<Long, java.util.Set<net.minecraft.client.renderer.texture.TextureAtlasSprite>> streamSections =
+		new java.util.concurrent.ConcurrentHashMap<>();
+	private static final java.util.Set<Long> requestedStreamSections = java.util.concurrent.ConcurrentHashMap.newKeySet();
+	private static volatile double streamReach = -1.0;
+	private static volatile double streamCameraX;
+	private static volatile double streamCameraY;
+	private static volatile double streamCameraZ;
+	private static int streamRefreshTicks;
+
+	private static double sectionDistance(long sectionKey) {
+		double dx = SodiumChunkMeshPriority.sectionX(sectionKey) * 16.0 + 8.0 - streamCameraX;
+		double dy = SodiumChunkMeshPriority.sectionY(sectionKey) * 16.0 + 8.0 - streamCameraY;
+		double dz = SodiumChunkMeshPriority.sectionZ(sectionKey) * 16.0 + 8.0 - streamCameraZ;
+		return Math.sqrt(dx * dx + dy * dy + dz * dz);
+	}
+
+	// Requests the tiles of sections that have come within streaming range since they were meshed.
+	private static void refreshStreamedSections() {
+		if (streamRefreshTicks-- > 0) {
+			return;
+		}
+		streamRefreshTicks = STREAM_REFRESH_TICKS;
+		com.malaron.loadsoflods.lod.LodConfig config = LoadsOfLodsClient.getConfig();
+		double radius = config.highResolutionDistance();
+		if (radius <= 0.0) {
+			streamReach = -1.0;
+			requestedStreamSections.clear();
+			return;
+		}
+		var camera = Minecraft.getInstance().gameRenderer.mainCamera().position();
+		streamCameraX = camera.x;
+		streamCameraY = camera.y;
+		streamCameraZ = camera.z;
+		double reach = radius + config.hysteresis() + STREAM_PREFETCH_BLOCKS;
+		streamReach = reach;
+		for (java.util.Map.Entry<Long, java.util.Set<net.minecraft.client.renderer.texture.TextureAtlasSprite>> entry
+				: streamSections.entrySet()) {
+			long key = entry.getKey();
+			double distance = sectionDistance(key);
+			if (distance - SECTION_RADIUS > reach) {
+				requestedStreamSections.remove(key);
+				continue;
+			}
+			if (!requestedStreamSections.add(key)) {
+				continue;
+			}
+			double distanceSquared = distance * distance;
+			for (net.minecraft.client.renderer.texture.TextureAtlasSprite sprite : entry.getValue()) {
+				VIRTUAL_TEXTURE_REQUEST_TRACKER.recordSpriteUsage(
+					sprite.getU0(),
+					sprite.getV0(),
+					sprite.getU1(),
+					sprite.getV1(),
+					generation,
+					distanceSquared
+				);
+			}
+		}
+	}
+
 	public static void clearSectionSpriteUsage(long sectionKey) {
 		NearAtlas near = nearAtlas;
 		if (near != null) {
 			near.clearSection(sectionKey);
 		}
+		streamSections.remove(sectionKey);
+		requestedStreamSections.remove(sectionKey);
 	}
 
 	public static synchronized void serviceVirtualTextureRequests() {
@@ -382,6 +460,9 @@ public final class AtlasPreviewState {
 				|| virtualTextureGpuCache == null
 				|| virtualTextureTileBuilder == null) {
 			return;
+		}
+		if (near == null) {
+			refreshStreamedSections();
 		}
 		long currentGeneration = pageTable.layout().atlasGeneration();
 		for (VirtualTextureRequestTracker.UvQuad quad
