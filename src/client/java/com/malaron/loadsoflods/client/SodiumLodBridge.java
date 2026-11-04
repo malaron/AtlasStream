@@ -148,7 +148,7 @@ public final class SodiumLodBridge {
 
 		SPLIT_PASSES.add(terrainRenderPass);
 		Vec3 cameraPosition = Minecraft.getInstance().gameRenderer.mainCamera().position();
-		Map<Boolean, FilteredListsByLod> filteredListsByTranslucency = new HashMap<>();
+		Map<Boolean, FilteredListsByLod> filteredListsByTranslucency = filteredListCache(renderLists, cameraPosition);
 		try {
 			for (SectionLod lod : SectionLod.values()) {
 				ACTIVE_LOD.set(lod);
@@ -419,6 +419,44 @@ public final class SodiumLodBridge {
 		} catch (InvocationTargetException exception) {
 			throw new IllegalStateException("Sodium rejected the terrain rebuild request", exception.getCause());
 		}
+	}
+
+	// Sodium reuses one render-list object for every terrain pass of a frame, and across frames until the visible set
+	// changes. The split depends only on that object, the camera cell, the warm state and the config, so the result
+	// is shared between the solid and cutout passes instead of rescanning every section for each.
+	private static final Map<Boolean, FilteredListsByLod> FILTER_CACHE = new HashMap<>();
+	private static Object filterCacheSource;
+	private static Object filterCacheLevel;
+	private static Object filterCacheConfig;
+	private static boolean filterCacheWarm;
+	private static int filterCacheCellX;
+	private static int filterCacheCellY;
+	private static int filterCacheCellZ;
+
+	private static Map<Boolean, FilteredListsByLod> filteredListCache(Object source, Vec3 cameraPosition) {
+		Object level = Minecraft.getInstance().level;
+		Object config = LoadsOfLodsClient.getConfig();
+		boolean warm = AtlasPreviewState.isNearAtlasWarm();
+		int cellX = RegionLodCache.cameraCell(cameraPosition.x);
+		int cellY = RegionLodCache.cameraCell(cameraPosition.y);
+		int cellZ = RegionLodCache.cameraCell(cameraPosition.z);
+		if (source != filterCacheSource
+				|| level != filterCacheLevel
+				|| config != filterCacheConfig
+				|| warm != filterCacheWarm
+				|| cellX != filterCacheCellX
+				|| cellY != filterCacheCellY
+				|| cellZ != filterCacheCellZ) {
+			FILTER_CACHE.clear();
+			filterCacheSource = source;
+			filterCacheLevel = level;
+			filterCacheConfig = config;
+			filterCacheWarm = warm;
+			filterCacheCellX = cellX;
+			filterCacheCellY = cellY;
+			filterCacheCellZ = cellZ;
+		}
+		return FILTER_CACHE;
 	}
 
 	private static Object filteredRenderLists(
