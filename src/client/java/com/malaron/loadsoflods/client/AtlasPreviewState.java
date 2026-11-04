@@ -382,8 +382,8 @@ public final class AtlasPreviewState {
 	}
 	private static final java.util.LinkedHashMap<VirtualTextureTileKey, AnimatedTile> animatedTiles =
 		new java.util.LinkedHashMap<>();
-	private static final int MAX_ANIMATED_TILES_	IN_FLIGHT = 48;
-		private static final int MAX_ANIMATED_TILE_UPLOADS_PER_TICK = 48;
+	private static final int MAX_ANIMATED_TILES_IN_FLIGHT = 48;
+	private static final int MAX_ANIMATED_TILE_UPLOADS_PER_TICK = 48;
 	private static final long MAX_ANIMATED_TILE_UPDATE_NANOS = 3_000_000L;
 	private static final java.util.concurrent.ExecutorService animatedTileExecutor =
 		java.util.concurrent.Executors.newFixedThreadPool(4, runnable -> {
