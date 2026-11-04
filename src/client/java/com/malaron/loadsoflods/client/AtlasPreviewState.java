@@ -333,15 +333,19 @@ public final class AtlasPreviewState {
 
 	public static void recordChunkSpriteUsage(net.minecraft.client.renderer.texture.TextureAtlasSprite sprite) {
 		NearAtlas near = nearAtlas;
+		long sectionKey = SodiumChunkMeshPriority.currentSectionKey();
+		// Kept in every mode so the streamed preview knows each section's sprites after shaders are switched off,
+		// when Sodium does not remesh the sections.
+		if (sectionKey != Long.MIN_VALUE) {
+			streamSections.computeIfAbsent(sectionKey, ignored -> java.util.concurrent.ConcurrentHashMap.newKeySet())
+				.add(sprite);
+		}
 		if (near != null) {
-			near.noteTerrainSprite(sprite, SodiumChunkMeshPriority.currentSectionKey());
+			near.noteTerrainSprite(sprite, sectionKey);
 		} else {
-			long sectionKey = SodiumChunkMeshPriority.currentSectionKey();
 			if (sectionKey != Long.MIN_VALUE) {
 				// Streaming every sprite of every meshed section floods the tile queue; only sections near the
 				// camera are requested, and refreshStreamedSections() requests the rest as they come into range.
-				streamSections.computeIfAbsent(sectionKey, ignored -> java.util.concurrent.ConcurrentHashMap.newKeySet())
-					.add(sprite);
 				double reach = streamReach;
 				if (reach < 0.0 || sectionDistance(sectionKey) - SECTION_RADIUS > reach) {
 					return;
