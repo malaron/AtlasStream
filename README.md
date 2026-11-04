@@ -146,8 +146,8 @@ backend does not support texture arrays. Tiles are composed from Minecraft's
 stitched sprite mipmaps. Tiles touching animated sprites are drawn from the
 sprite's current full-resolution frame and rewritten in place when it changes,
 only for sprites used by sections within the streaming range (up to 8 tile
-rewrites and about 3 ms per tick). Interpolated animations step instead of
-blending. Sodium's chunk shader is patched at compile time to
+rewrites and about 3 ms per tick, built on worker threads). Interpolated
+animations are blended in 4 steps between frames. Sodium's chunk shader is patched at compile time to
 sample resident virtual tiles in the high-resolution and translucent terrain
 passes and use the
 low-resolution atlas on cache misses. Mip selection comes from the UV derivatives
