@@ -67,6 +67,7 @@ final class NearAtlas implements AutoCloseable {
 	private final Set<TextureAtlasSprite> alwaysAnimated = ConcurrentHashMap.newKeySet();
 	private volatile Set<TextureAtlasSprite> activeSprites = Set.of();
 	private int activeRefreshTicks;
+	private static final double SECTION_RADIUS = 14.0;
 	private final ConcurrentLinkedQueue<TextureAtlasSprite> incoming = new ConcurrentLinkedQueue<>();
 	private final List<Job> jobs = new ArrayList<>();
 	private final java.util.Map<TextureAtlasSprite, Geometry> resident = new java.util.HashMap<>();
@@ -182,16 +183,31 @@ final class NearAtlas implements AutoCloseable {
 		double radius = LoadsOfLodsClient.getConfig().highResolutionDistance();
 		Set<TextureAtlasSprite> active = new java.util.HashSet<>(alwaysAnimated);
 		if (radius > 0.0) {
-			var camera = net.minecraft.client.Minecraft.getInstance().gameRenderer.mainCamera().position();
-			// Matches the section policy's hysteresis, plus half a section diagonal.
-			double reach = radius + LoadsOfLodsClient.getConfig().hysteresis() + 16.0;
-			double reachSquared = reach * reach;
+			var minecraft = net.minecraft.client.Minecraft.getInstance();
+			var cameraEntity = minecraft.gameRenderer.mainCamera();
+			var camera = cameraEntity.position();
+			var forward = cameraEntity.forwardVector();
+			double reach = radius + LoadsOfLodsClient.getConfig().hysteresis();
+			double aspect = (double) minecraft.getWindow().getWidth() / Math.max(1, minecraft.getWindow().getHeight());
+			// Cone around the view direction that covers the frustum corners, plus a small margin.
+			double halfAngle = Math.atan(Math.tan(Math.toRadians(cameraEntity.getFov()) / 2.0) * Math.sqrt(1.0 + aspect * aspect))
+				+ Math.toRadians(8.0);
 			for (java.util.Map.Entry<TextureAtlasSprite, Set<Long>> entry : sectionUses.entrySet()) {
 				for (long key : entry.getValue()) {
 					double dx = SodiumChunkMeshPriority.sectionX(key) * 16.0 + 8.0 - camera.x;
 					double dy = SodiumChunkMeshPriority.sectionY(key) * 16.0 + 8.0 - camera.y;
 					double dz = SodiumChunkMeshPriority.sectionZ(key) * 16.0 + 8.0 - camera.z;
-					if (dx * dx + dy * dy + dz * dz <= reachSquared) {
+					double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+					if (distance - SECTION_RADIUS > reach) {
+						continue;
+					}
+					boolean visible = distance <= SECTION_RADIUS;
+					if (!visible) {
+						double cos = (dx * forward.x() + dy * forward.y() + dz * forward.z()) / distance;
+						double angle = Math.acos(Math.max(-1.0, Math.min(1.0, cos)));
+						visible = angle <= halfAngle + Math.asin(Math.min(1.0, SECTION_RADIUS / distance));
+					}
+					if (visible) {
 						active.add(entry.getKey());
 						break;
 					}
@@ -209,7 +225,7 @@ final class NearAtlas implements AutoCloseable {
 			return;
 		}
 		if (activeRefreshTicks-- <= 0) {
-			activeRefreshTicks = 10;
+			activeRefreshTicks = 3;
 			refreshActiveSprites();
 		}
 		for (int started = 0; started < MAX_NEW_JOBS_PER_TICK; started++) {
