@@ -376,21 +376,77 @@ public final class AtlasPreviewState {
 	private static final java.util.Map<String, Integer> spriteFrames = new java.util.concurrent.ConcurrentHashMap<>();
 	private static final java.util.LinkedHashMap<VirtualTextureTileKey, AnimatedTile> animatedTiles =
 		new java.util.LinkedHashMap<>();
-	private static final int MAX_ANIMATED_TILE_UPDATES_PER_TICK = 8;
+	private static final int MAX_ANIMATED_TILES_IN_FLIGHT = 24;
+	private static final int MAX_ANIMATED_TILE_UPLOADS_PER_TICK = 24;
 	private static final long MAX_ANIMATED_TILE_UPDATE_NANOS = 3_000_000L;
+	private static final java.util.concurrent.ExecutorService animatedTileExecutor =
+		java.util.concurrent.Executors.newFixedThreadPool(2, runnable -> {
+			Thread thread = new Thread(runnable, "Loads of Lods animated tiles");
+			thread.setDaemon(true);
+			return thread;
+		});
+	private static final java.util.LinkedHashMap<VirtualTextureTileKey, PreparedTile> preparingTiles =
+		new java.util.LinkedHashMap<>();
 
 	private record AnimatedTile(List<String> names, int[] frames) {
+	}
+
+	private record PreparedTile(AnimatedTile snapshot, java.util.concurrent.Future<List<NativeImage>> images) {
+	}
+
+	private static void discardPreparedTiles() {
+		for (PreparedTile prepared : preparingTiles.values()) {
+			animatedTileExecutor.submit(() -> {
+				try {
+					closeImages(prepared.images().get());
+				} catch (Exception ignored) {
+					// The build failed or was interrupted, so there is nothing to close.
+				}
+			});
+		}
+		preparingTiles.clear();
+	}
+
+	// Tile pixels are built on worker threads; the render thread only writes finished tiles to the GPU.
+	private static void uploadPreparedTiles(VirtualTextureGpuCache cache) {
+		long start = System.nanoTime();
+		int uploads = 0;
+		java.util.Iterator<java.util.Map.Entry<VirtualTextureTileKey, PreparedTile>> iterator =
+			preparingTiles.entrySet().iterator();
+		while (iterator.hasNext() && uploads < MAX_ANIMATED_TILE_UPLOADS_PER_TICK) {
+			if (uploads > 0 && System.nanoTime() - start >= MAX_ANIMATED_TILE_UPDATE_NANOS) {
+				break;
+			}
+			java.util.Map.Entry<VirtualTextureTileKey, PreparedTile> entry = iterator.next();
+			if (!entry.getValue().images().isDone()) {
+				continue;
+			}
+			iterator.remove();
+			List<NativeImage> images = null;
+			try {
+				images = entry.getValue().images().get();
+				if (cache.update(entry.getKey(), images)) {
+					animatedTiles.put(entry.getKey(), entry.getValue().snapshot());
+					uploads++;
+				}
+			} catch (Exception exception) {
+				LoadsOfLods.LOGGER.error("Could not update animated virtual texture tile {}", entry.getKey(), exception);
+			} finally {
+				if (images != null) {
+					closeImages(images);
+				}
+			}
+		}
 	}
 
 	// Rebuilds resident tiles containing animated sprites whose frame changed, only for sprites near the camera.
 	// Updated tiles move to the back of the map so a backlog is worked through fairly.
 	private static void serviceAnimatedTiles(VirtualTextureGpuCache cache, VirtualTextureTileBuilder builder) {
+		uploadPreparedTiles(cache);
 		if (animatedTiles.isEmpty()) {
 			return;
 		}
 		java.util.Set<String> active = activeAnimatedSprites;
-		long start = System.nanoTime();
-		int updates = 0;
 		List<VirtualTextureTileKey> due = new ArrayList<>();
 		for (java.util.Iterator<java.util.Map.Entry<VirtualTextureTileKey, AnimatedTile>> iterator =
 				animatedTiles.entrySet().iterator(); iterator.hasNext();) {
@@ -400,6 +456,9 @@ public final class AtlasPreviewState {
 				continue;
 			}
 			AnimatedTile tile = entry.getValue();
+			if (preparingTiles.containsKey(entry.getKey())) {
+				continue;
+			}
 			for (int index = 0; index < tile.names().size(); index++) {
 				String name = tile.names().get(index);
 				if (active.contains(name) && !java.util.Objects.equals(spriteFrames.get(name), tile.frames()[index])) {
@@ -408,19 +467,39 @@ public final class AtlasPreviewState {
 				}
 			}
 		}
+		int cacheMipLevels = Math.min(
+			Integer.numberOfTrailingZeros(VIRTUAL_TILE_SIZE) + 1,
+			virtualTextureGpuPageTable.layout().mipLevelCount()
+		);
 		for (VirtualTextureTileKey key : due) {
-			if (updates >= MAX_ANIMATED_TILE_UPDATES_PER_TICK
-					|| (updates > 0 && System.nanoTime() - start >= MAX_ANIMATED_TILE_UPDATE_NANOS)) {
+			if (preparingTiles.size() >= MAX_ANIMATED_TILES_IN_FLIGHT) {
 				break;
 			}
-			animatedTiles.remove(key);
-			try {
-				uploadTileImages(cache, builder, key, true);
-				animatedTiles.put(key, snapshotAnimatedTile(builder, key));
-			} catch (RuntimeException exception) {
-				LoadsOfLods.LOGGER.error("Could not update animated virtual texture tile {}", key, exception);
+			AnimatedTile snapshot = snapshotAnimatedTile(builder, key);
+			preparingTiles.put(key, new PreparedTile(snapshot, animatedTileExecutor.submit(() -> {
+				List<TileMip> builtMips = builder.build(key, cacheMipLevels);
+				List<NativeImage> images = new ArrayList<>(builtMips.size());
+				try {
+					for (TileMip mip : builtMips) {
+						NativeImage image = new NativeImage(mip.width(), mip.height(), true);
+						images.add(image);
+						for (int y = 0; y < mip.height(); y++) {
+							for (int x = 0; x < mip.width(); x++) {
+								image.setPixel(x, y, mip.pixel(x, y));
+							}
+						}
+					}
+					return images;
+				} catch (RuntimeException exception) {
+					closeImages(images);
+					throw exception;
+				}
+			})));
+			// Moves the tile to the back so a backlog is worked through fairly.
+			AnimatedTile existing = animatedTiles.remove(key);
+			if (existing != null) {
+				animatedTiles.put(key, existing);
 			}
-			updates++;
 		}
 	}
 
@@ -1646,6 +1725,7 @@ public final class AtlasPreviewState {
 		pendingVirtualTextureTiles.clear();
 		animatedVirtualTextureTiles.clear();
 		animatedTiles.clear();
+		discardPreparedTiles();
 		spriteFrames.clear();
 		activeVirtualTextureCursor = null;
 		activeVirtualTextureDistanceSquared = Double.POSITIVE_INFINITY;
