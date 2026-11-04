@@ -29,7 +29,7 @@ dependencies {
 	implementation "com.google.code.gson:gson:2.13.1"
 
 	// Optional integrations; the mod runs without them.
-	clientCompileOnly "com.terraformersmc:modmenu:22.0.0-alpha.3"
+	clientCompileOnly "com.terraformersmc:modmenu:21.0.0"
 	clientCompileOnly "dev.isxander:yet-another-config-lib:3.9.7+26.3-fabric"
 
 	testImplementation "org.junit.jupiter:junit-jupiter:5.13.4"
