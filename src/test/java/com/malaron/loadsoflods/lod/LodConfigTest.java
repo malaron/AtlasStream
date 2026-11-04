@@ -36,6 +36,17 @@ class LodConfigTest {
 	}
 
 	@Test
+	void keepsHysteresisWhenDistanceIsZero() {
+		Path file = temporaryDirectory.resolve("loads-of-lods.properties");
+		LodConfig off = new LodConfig(0.0, 16.0, 512, 4);
+
+		LodConfig.save(file, off);
+
+		assertEquals(off, LodConfig.load(file));
+		assertThrows(IllegalArgumentException.class, () -> new LodConfig(8.0, 16.0, 512, 4));
+	}
+
+	@Test
 	void rejectsUnsupportedDownscaleFactor() throws IOException {
 		Path file = temporaryDirectory.resolve("loads-of-lods.properties");
 		Files.writeString(file, "downscaleFactor=3\n");

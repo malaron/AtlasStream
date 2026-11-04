@@ -30,7 +30,9 @@ public record LodConfig(double highResolutionDistance, double hysteresis, long h
 		if (!Double.isFinite(highResolutionDistance) || highResolutionDistance < 0.0) {
 			throw new IllegalArgumentException("High-resolution distance must be a finite, non-negative number (0 disables near textures)");
 		}
-		if (!Double.isFinite(hysteresis) || hysteresis < 0.0 || hysteresis > highResolutionDistance) {
+		// Hysteresis is ignored (and kept as-is) while the distance is 0, so it may exceed it.
+		if (!Double.isFinite(hysteresis) || hysteresis < 0.0
+				|| (highResolutionDistance > 0.0 && hysteresis > highResolutionDistance)) {
 			throw new IllegalArgumentException(
 				"Hysteresis must be finite, non-negative, and no greater than the high-resolution distance"
 			);

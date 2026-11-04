@@ -99,7 +99,7 @@ final class LodConfigScreen {
 					double distance = distanceChunks[0] * 16.0;
 					LoadsOfLodsClient.updateConfig(new LodConfig(
 						distance,
-						Math.min(hysteresis[0], distance),
+						distance > 0.0 ? Math.min(hysteresis[0], distance) : hysteresis[0],
 						cacheMiB[0],
 						factor[0],
 						tint[0]
