@@ -357,6 +357,8 @@ final class NearAtlas implements AutoCloseable {
 				+ " pending, " + failedSprites + " failed",
 			"Near animation: " + activeSprites.size() + " sprites active, " + uploadsPerSecond + " uploads/s, backlog avg "
 				+ String.format(java.util.Locale.ROOT, "%.0f", averageBacklog) + " peak " + displayedPeak,
+			"Active: " + activeSprites.stream().limit(8).map(s -> s.contents().name().getPath()
+				+ (alwaysAnimated.contains(s) ? "*" : "")).sorted().toList() + " (*=always)",
 			"Near committed VRAM: " + String.format(java.util.Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024.0))
 				+ (failed ? " (disabled after an error)" : "")
 		);
