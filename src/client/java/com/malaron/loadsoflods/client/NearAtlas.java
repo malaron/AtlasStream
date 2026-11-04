@@ -64,8 +64,8 @@ final class NearAtlas implements AutoCloseable {
 	private final ConcurrentLinkedQueue<TextureAtlasSprite> incoming = new ConcurrentLinkedQueue<>();
 	private final List<Job> jobs = new ArrayList<>();
 	private final java.util.Map<TextureAtlasSprite, Geometry> resident = new java.util.HashMap<>();
-	private final java.util.Map<TextureAtlasSprite, Integer> lastFrame = new java.util.HashMap<>();
-	private final java.util.LinkedHashMap<TextureAtlasSprite, Integer> pendingFrames = new java.util.LinkedHashMap<>();
+	private final java.util.Map<TextureAtlasSprite, FrameKey> lastFrame = new java.util.HashMap<>();
+	private final java.util.LinkedHashMap<TextureAtlasSprite, FrameKey> pendingFrames = new java.util.LinkedHashMap<>();
 	private int residentSprites;
 	private int failedSprites;
 	private volatile boolean closed;
@@ -180,16 +180,17 @@ final class NearAtlas implements AutoCloseable {
 		flushAnimations();
 	}
 
-	// Render thread only. Queues the albedo re-upload for a resident animated sprite whose frame changed.
+	// Render thread only. Queues the albedo re-upload for a resident animated sprite whose displayed frame changed.
 	// PBR maps keep frame 0. Queued work is drained under a time budget in service().
-	void animate(TextureAtlasSprite sprite, int frameIndex) {
+	void animate(TextureAtlasSprite sprite, int frameIndex, int nextFrameIndex, float nextWeight) {
 		if (closed || failed || !resident.containsKey(sprite)) {
 			return;
 		}
-		if (lastFrame.getOrDefault(sprite, 0) == frameIndex) {
+		FrameKey key = new FrameKey(frameIndex, nextFrameIndex, nextWeight);
+		if (lastFrame.getOrDefault(sprite, new FrameKey(0, 0, 0.0F)).equals(key)) {
 			pendingFrames.remove(sprite);
 		} else {
-			pendingFrames.put(sprite, frameIndex);
+			pendingFrames.put(sprite, key);
 		}
 	}
 
@@ -201,13 +202,19 @@ final class NearAtlas implements AutoCloseable {
 		List<List<LevelData>> batch = new ArrayList<>();
 		List<TextureAtlasSprite> done = new ArrayList<>();
 		try {
-			for (java.util.Map.Entry<TextureAtlasSprite, Integer> entry : pendingFrames.entrySet()) {
+			for (java.util.Map.Entry<TextureAtlasSprite, FrameKey> entry : pendingFrames.entrySet()) {
 				if (!batch.isEmpty() && System.nanoTime() > deadline) {
 					break;
 				}
-				batch.add(albedoLevels(entry.getKey(), resident.get(entry.getKey()), entry.getValue()));
-				lastFrame.put(entry.getKey(), entry.getValue());
-				done.add(entry.getKey());
+				TextureAtlasSprite sprite = entry.getKey();
+				FrameKey key = entry.getValue();
+				Geometry geometry = resident.get(sprite);
+				List<LevelData> current = albedoLevels(sprite, geometry, key.frame);
+				batch.add(key.weight > 0.0F
+					? blend(current, albedoLevels(sprite, geometry, key.nextFrame), key.weight)
+					: current);
+				lastFrame.put(sprite, key);
+				done.add(sprite);
 			}
 			writeAll(albedo, batch);
 		} catch (RuntimeException exception) {
@@ -220,11 +227,33 @@ final class NearAtlas implements AutoCloseable {
 		}
 	}
 
+	private static List<LevelData> blend(List<LevelData> current, List<LevelData> next, float weight) {
+		List<LevelData> blended = new ArrayList<>(current.size());
+		for (int level = 0; level < current.size(); level++) {
+			LevelData a = current.get(level);
+			LevelData b = next.get(level);
+			int[] out = new int[a.argb.length];
+			for (int i = 0; i < out.length; i++) {
+				int first = a.argb[i];
+				int second = b.argb[i];
+				int result = 0;
+				for (int shift = 0; shift < 32; shift += 8) {
+					int from = (first >>> shift) & 0xFF;
+					int to = (second >>> shift) & 0xFF;
+					result |= Math.round(from + (to - from) * weight) << shift;
+				}
+				out[i] = result;
+			}
+			blended.add(new LevelData(a.level, a.x, a.y, a.width, a.height, out));
+		}
+		return blended;
+	}
+
 	List<String> debugLines() {
 		long bytes = albedo.committedBytes + normal.committedBytes + specular.committedBytes;
 		return List.of(
 			"Near sparse atlas: " + residentSprites + " sprites resident, " + (jobs.size() + incoming.size())
-				+ " pending, " + failedSprites + " failed",
+				+ " pending, " + failedSprites + " failed, " + pendingFrames.size() + " animation updates queued",
 			"Near committed VRAM: " + String.format(java.util.Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024.0))
 				+ (failed ? " (disabled after an error)" : "")
 		);
@@ -532,6 +561,9 @@ final class NearAtlas implements AutoCloseable {
 	}
 
 	private static final class Wrapper extends AbstractTexture {
+	}
+
+	private record FrameKey(int frame, int nextFrame, float weight) {
 	}
 
 	private record Geometry(int x, int y, int width, int height, int padX, int padY) {

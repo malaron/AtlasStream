@@ -1150,7 +1150,15 @@ public final class AtlasPreviewState {
 				}
 				NearAtlas near = nearAtlas;
 				if (near != null) {
-					near.animate(sprite, animation.steps().get(framePosition).frameIndex());
+					AnimationStep nearStep = animation.steps().get(framePosition);
+					int nearNext = animation.steps().get((framePosition + 1) % animation.steps().size()).frameIndex();
+					boolean blend = animation.interpolated() && subFrame > 0;
+					near.animate(
+						sprite,
+						nearStep.frameIndex(),
+						blend ? nearNext : nearStep.frameIndex(),
+						blend ? subFrame / (float) nearStep.duration() : 0.0F
+					);
 				}
 				if (animation.lastFramePosition == framePosition
 						&& (!animation.interpolated() || animation.lastSubFrame == subFrame)) {
