@@ -44,7 +44,9 @@ final class NearAtlas implements AutoCloseable {
 	private static final int DEFAULT_SPECULAR = 0;
 	private static final int MAX_NEW_JOBS_PER_TICK = 8;
 	private static final int MAX_UPLOADS_PER_TICK = 8;
-	private static final long ANIMATION_BUDGET_NANOS = 2_000_000L;
+	private static final int MAX_ANIMATIONS_IN_FLIGHT = 48;
+	private static final int MAX_ANIMATION_UPLOADS_PER_TICK = 24;
+	private static final FrameKey FIRST_FRAME = new FrameKey(0, 0, 0.0F);
 
 	private final int width;
 	private final int height;
@@ -55,7 +57,7 @@ final class NearAtlas implements AutoCloseable {
 	private final Layer specular;
 	private final AbstractTexture normalWrapper = new Wrapper();
 	private final AbstractTexture specularWrapper = new Wrapper();
-	private final ExecutorService executor = Executors.newFixedThreadPool(2, runnable -> {
+	private final ExecutorService executor = Executors.newFixedThreadPool(3, runnable -> {
 		Thread thread = new Thread(runnable, "Loads of Lods near-atlas loader");
 		thread.setDaemon(true);
 		return thread;
@@ -66,6 +68,7 @@ final class NearAtlas implements AutoCloseable {
 	private final java.util.Map<TextureAtlasSprite, Geometry> resident = new java.util.HashMap<>();
 	private final java.util.Map<TextureAtlasSprite, FrameKey> lastFrame = new java.util.HashMap<>();
 	private final java.util.LinkedHashMap<TextureAtlasSprite, FrameKey> pendingFrames = new java.util.LinkedHashMap<>();
+	private final java.util.LinkedHashMap<TextureAtlasSprite, PreparedFrame> preparing = new java.util.LinkedHashMap<>();
 	private int residentSprites;
 	private int failedSprites;
 	private volatile boolean closed;
@@ -186,44 +189,53 @@ final class NearAtlas implements AutoCloseable {
 		if (closed || failed || !resident.containsKey(sprite)) {
 			return;
 		}
-		FrameKey key = new FrameKey(frameIndex, nextFrameIndex, nextWeight);
-		if (lastFrame.getOrDefault(sprite, new FrameKey(0, 0, 0.0F)).equals(key)) {
-			pendingFrames.remove(sprite);
-		} else {
-			pendingFrames.put(sprite, key);
-		}
+		pendingFrames.put(sprite, new FrameKey(frameIndex, nextFrameIndex, nextWeight));
 	}
 
+	// The CPU work (frame copy, padding, blending, channel swizzle) runs on worker threads;
+	// the render thread only uploads finished frames.
 	private void flushAnimations() {
-		if (pendingFrames.isEmpty()) {
-			return;
-		}
-		long deadline = System.nanoTime() + ANIMATION_BUDGET_NANOS;
-		List<List<LevelData>> batch = new ArrayList<>();
-		List<TextureAtlasSprite> done = new ArrayList<>();
-		try {
-			for (java.util.Map.Entry<TextureAtlasSprite, FrameKey> entry : pendingFrames.entrySet()) {
-				if (!batch.isEmpty() && System.nanoTime() > deadline) {
-					break;
-				}
-				TextureAtlasSprite sprite = entry.getKey();
-				FrameKey key = entry.getValue();
-				Geometry geometry = resident.get(sprite);
-				List<LevelData> current = albedoLevels(sprite, geometry, key.frame);
-				batch.add(key.weight > 0.0F
-					? blend(current, albedoLevels(sprite, geometry, key.nextFrame), key.weight)
-					: current);
-				lastFrame.put(sprite, key);
-				done.add(sprite);
+		Iterator<java.util.Map.Entry<TextureAtlasSprite, FrameKey>> wanted = pendingFrames.entrySet().iterator();
+		while (wanted.hasNext() && preparing.size() < MAX_ANIMATIONS_IN_FLIGHT) {
+			java.util.Map.Entry<TextureAtlasSprite, FrameKey> entry = wanted.next();
+			TextureAtlasSprite sprite = entry.getKey();
+			FrameKey key = entry.getValue();
+			if (preparing.containsKey(sprite)) {
+				continue;
 			}
-			writeAll(albedo, batch);
-		} catch (RuntimeException exception) {
+			wanted.remove();
+			if (key.equals(lastFrame.getOrDefault(sprite, FIRST_FRAME))) {
+				continue;
+			}
+			Geometry geometry = resident.get(sprite);
+			preparing.put(sprite, new PreparedFrame(key, executor.submit(() -> {
+				List<LevelData> current = albedoLevels(sprite, geometry, key.frame);
+				return key.weight > 0.0F
+					? blend(current, albedoLevels(sprite, geometry, key.nextFrame), key.weight)
+					: current;
+			})));
+		}
+
+		List<List<LevelData>> batch = new ArrayList<>();
+		try {
+			Iterator<java.util.Map.Entry<TextureAtlasSprite, PreparedFrame>> ready = preparing.entrySet().iterator();
+			while (ready.hasNext() && batch.size() < MAX_ANIMATION_UPLOADS_PER_TICK) {
+				java.util.Map.Entry<TextureAtlasSprite, PreparedFrame> entry = ready.next();
+				if (!entry.getValue().levels.isDone()) {
+					continue;
+				}
+				ready.remove();
+				batch.add(entry.getValue().levels.get());
+				lastFrame.put(entry.getKey(), entry.getValue().key);
+			}
+			if (!batch.isEmpty()) {
+				writeAll(albedo, batch);
+			}
+		} catch (java.util.concurrent.ExecutionException | InterruptedException | RuntimeException exception) {
 			LoadsOfLods.LOGGER.error("Could not animate near sprites", exception);
 			if (exception instanceof IllegalStateException) {
 				failed = true;
 			}
-		} finally {
-			done.forEach(pendingFrames::remove);
 		}
 	}
 
@@ -253,7 +265,7 @@ final class NearAtlas implements AutoCloseable {
 		long bytes = albedo.committedBytes + normal.committedBytes + specular.committedBytes;
 		return List.of(
 			"Near sparse atlas: " + residentSprites + " sprites resident, " + (jobs.size() + incoming.size())
-				+ " pending, " + failedSprites + " failed, " + pendingFrames.size() + " animation updates queued",
+				+ " pending, " + failedSprites + " failed, " + pendingFrames.size() + preparing.size() + " animation updates queued",
 			"Near committed VRAM: " + String.format(java.util.Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024.0))
 				+ (failed ? " (disabled after an error)" : "")
 		);
@@ -400,7 +412,9 @@ final class NearAtlas implements AutoCloseable {
 		for (int y = 0; y < qh; y++) {
 			int sy = Math.clamp(y - padY, 0, sh - 1);
 			for (int x = 0; x < qw; x++) {
-				out[y * qw + x] = source[sy * sw + Math.clamp(x - padX, 0, sw - 1)];
+				int pixel = source[sy * sw + Math.clamp(x - padX, 0, sw - 1)];
+				// ARGB to little-endian RGBA bytes, ready for a direct upload.
+				out[y * qw + x] = (pixel & 0xFF00FF00) | ((pixel >> 16) & 0xFF) | ((pixel & 0xFF) << 16);
 			}
 		}
 		return new LevelData(level, geometry.x >> level, geometry.y >> level, qw, qh, out);
@@ -429,9 +443,7 @@ final class NearAtlas implements AutoCloseable {
 					ByteBuffer buffer = MemoryUtil.memAlloc(data.width * data.height * 4);
 					try {
 						IntBuffer ints = buffer.asIntBuffer();
-						for (int pixel : data.argb) {
-							ints.put((pixel & 0xFF00FF00) | ((pixel >> 16) & 0xFF) | ((pixel & 0xFF) << 16));
-						}
+						ints.put(data.argb);
 						GL11.glTexSubImage2D(
 							GL11.GL_TEXTURE_2D, data.level, data.x, data.y, data.width, data.height,
 							GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, buffer
@@ -561,6 +573,9 @@ final class NearAtlas implements AutoCloseable {
 	}
 
 	private static final class Wrapper extends AbstractTexture {
+	}
+
+	private record PreparedFrame(FrameKey key, Future<List<LevelData>> levels) {
 	}
 
 	private record FrameKey(int frame, int nextFrame, float weight) {
