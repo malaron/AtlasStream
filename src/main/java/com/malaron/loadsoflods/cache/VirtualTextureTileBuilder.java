@@ -11,6 +11,7 @@ public final class VirtualTextureTileBuilder {
 	private final int mipLevelCount;
 	private final long atlasGeneration;
 	private final List<SpriteSource> sprites;
+	private volatile AnimationFrames animationFrames;
 
 	public VirtualTextureTileBuilder(
 		int atlasWidth,
@@ -71,13 +72,18 @@ public final class VirtualTextureTileBuilder {
 			int sourceHeight = Math.max(1, atlasHeight >> sourceMip);
 			int[] pixels = new int[Math.multiplyExact(width, height)];
 			for (SpriteSource sprite : sprites) {
-				if (sprite.animated() && intersects(sprite, sourceMip, originX, originY, width, height)) {
-					throw new AnimatedTileException(sprite.name());
-				}
+				MipImage image;
 				if (sprite.animated()) {
-					continue;
+					if (!intersects(sprite, sourceMip, originX, originY, width, height)) {
+						continue;
+					}
+					image = animationFrames == null ? null : animationFrames.currentFrame(sprite.name(), sourceMip);
+					if (image == null) {
+						throw new AnimatedTileException(sprite.name());
+					}
+				} else {
+					image = sprite.mipImage(sourceMip);
 				}
-				MipImage image = sprite.mipImage(sourceMip);
 				if (image == null) {
 					throw new IllegalStateException(
 						"Sprite " + sprite.name() + " has no source image for atlas mip level " + sourceMip
@@ -99,6 +105,28 @@ public final class VirtualTextureTileBuilder {
 			result.add(new TileMip(width, height, pixels));
 		}
 		return List.copyOf(result);
+	}
+
+	// Names of the animated sprites whose pixels appear in the tile, so it can be rebuilt when their frame changes.
+	public List<String> animatedSpriteNames(VirtualTextureTileKey key) {
+		List<String> names = new ArrayList<>();
+		int originX = key.tileX() * tileSize;
+		int originY = key.tileY() * tileSize;
+		for (SpriteSource sprite : sprites) {
+			if (sprite.animated() && intersects(sprite, key.mipLevel(), originX, originY, tileSize, tileSize)) {
+				names.add(sprite.name());
+			}
+		}
+		return names;
+	}
+
+	public void setAnimationFrames(AnimationFrames animationFrames) {
+		this.animationFrames = animationFrames;
+	}
+
+	public interface AnimationFrames {
+		// The image of the sprite's currently displayed frame for the atlas mip level, or null if unavailable.
+		MipImage currentFrame(String spriteName, int mipLevel);
 	}
 
 	private void copySpritePixels(

@@ -276,26 +276,12 @@ public final class AtlasPreviewState {
 		if (residentLayer != null) {
 			return residentLayer;
 		}
-		int cacheMipLevels = Math.min(
-			Integer.numberOfTrailingZeros(VIRTUAL_TILE_SIZE) + 1,
-			pageTable.layout().mipLevelCount()
-		);
-		List<TileMip> builtMips = tileBuilder.build(key, cacheMipLevels);
-		List<NativeImage> images = new ArrayList<>(builtMips.size());
-		try {
-			for (TileMip mip : builtMips) {
-				NativeImage image = new NativeImage(mip.width(), mip.height(), true);
-				images.add(image);
-				for (int y = 0; y < mip.height(); y++) {
-					for (int x = 0; x < mip.width(); x++) {
-						image.setPixel(x, y, mip.pixel(x, y));
-					}
-				}
-			}
-			return cache.upload(key, images);
-		} finally {
-			closeImages(images);
+		int slot = uploadTileImages(cache, tileBuilder, key, false);
+		AnimatedTile animated = snapshotAnimatedTile(tileBuilder, key);
+		if (!animated.names().isEmpty()) {
+			animatedTiles.put(key, animated);
 		}
+		return slot;
 	}
 
 	private static volatile NearAtlas nearAtlas;
@@ -385,6 +371,99 @@ public final class AtlasPreviewState {
 	private static volatile double streamCameraZ;
 	private static int streamRefreshTicks;
 	private static long streamGeneration = Long.MIN_VALUE;
+	private static volatile java.util.Set<String> activeAnimatedSprites = java.util.Set.of();
+	// Displayed frame (strip index) of every animated sprite, updated each tick by updateAnimatedFrames.
+	private static final java.util.Map<String, Integer> spriteFrames = new java.util.concurrent.ConcurrentHashMap<>();
+	private static final java.util.LinkedHashMap<VirtualTextureTileKey, AnimatedTile> animatedTiles =
+		new java.util.LinkedHashMap<>();
+	private static final int MAX_ANIMATED_TILE_UPDATES_PER_TICK = 8;
+	private static final long MAX_ANIMATED_TILE_UPDATE_NANOS = 3_000_000L;
+
+	private record AnimatedTile(List<String> names, int[] frames) {
+	}
+
+	// Rebuilds resident tiles containing animated sprites whose frame changed, only for sprites near the camera.
+	// Updated tiles move to the back of the map so a backlog is worked through fairly.
+	private static void serviceAnimatedTiles(VirtualTextureGpuCache cache, VirtualTextureTileBuilder builder) {
+		if (animatedTiles.isEmpty()) {
+			return;
+		}
+		java.util.Set<String> active = activeAnimatedSprites;
+		long start = System.nanoTime();
+		int updates = 0;
+		List<VirtualTextureTileKey> due = new ArrayList<>();
+		for (java.util.Iterator<java.util.Map.Entry<VirtualTextureTileKey, AnimatedTile>> iterator =
+				animatedTiles.entrySet().iterator(); iterator.hasNext();) {
+			java.util.Map.Entry<VirtualTextureTileKey, AnimatedTile> entry = iterator.next();
+			if (!cache.isResident(entry.getKey())) {
+				iterator.remove();
+				continue;
+			}
+			AnimatedTile tile = entry.getValue();
+			for (int index = 0; index < tile.names().size(); index++) {
+				String name = tile.names().get(index);
+				if (active.contains(name) && !java.util.Objects.equals(spriteFrames.get(name), tile.frames()[index])) {
+					due.add(entry.getKey());
+					break;
+				}
+			}
+		}
+		for (VirtualTextureTileKey key : due) {
+			if (updates >= MAX_ANIMATED_TILE_UPDATES_PER_TICK
+					|| (updates > 0 && System.nanoTime() - start >= MAX_ANIMATED_TILE_UPDATE_NANOS)) {
+				break;
+			}
+			animatedTiles.remove(key);
+			try {
+				uploadTileImages(cache, builder, key, true);
+				animatedTiles.put(key, snapshotAnimatedTile(builder, key));
+			} catch (RuntimeException exception) {
+				LoadsOfLods.LOGGER.error("Could not update animated virtual texture tile {}", key, exception);
+			}
+			updates++;
+		}
+	}
+
+	private static AnimatedTile snapshotAnimatedTile(VirtualTextureTileBuilder builder, VirtualTextureTileKey key) {
+		List<String> names = builder.animatedSpriteNames(key);
+		int[] frames = new int[names.size()];
+		for (int index = 0; index < frames.length; index++) {
+			frames[index] = spriteFrames.getOrDefault(names.get(index), 0);
+		}
+		return new AnimatedTile(names, frames);
+	}
+
+	private static int uploadTileImages(
+		VirtualTextureGpuCache cache,
+		VirtualTextureTileBuilder builder,
+		VirtualTextureTileKey key,
+		boolean replace
+	) {
+		int cacheMipLevels = Math.min(
+			Integer.numberOfTrailingZeros(VIRTUAL_TILE_SIZE) + 1,
+			virtualTextureGpuPageTable.layout().mipLevelCount()
+		);
+		List<TileMip> builtMips = builder.build(key, cacheMipLevels);
+		List<NativeImage> images = new ArrayList<>(builtMips.size());
+		try {
+			for (TileMip mip : builtMips) {
+				NativeImage image = new NativeImage(mip.width(), mip.height(), true);
+				images.add(image);
+				for (int y = 0; y < mip.height(); y++) {
+					for (int x = 0; x < mip.width(); x++) {
+						image.setPixel(x, y, mip.pixel(x, y));
+					}
+				}
+			}
+			if (replace) {
+				cache.update(key, images);
+				return -1;
+			}
+			return cache.upload(key, images);
+		} finally {
+			closeImages(images);
+		}
+	}
 
 	private static double sectionDistance(long sectionKey) {
 		double dx = SodiumChunkMeshPriority.sectionX(sectionKey) * 16.0 + 8.0 - streamCameraX;
@@ -409,6 +488,7 @@ public final class AtlasPreviewState {
 		if (radius <= 0.0) {
 			streamReach = -1.0;
 			requestedStreamSections.clear();
+			activeAnimatedSprites = java.util.Set.of();
 			return;
 		}
 		var camera = Minecraft.getInstance().gameRenderer.mainCamera().position();
@@ -417,6 +497,7 @@ public final class AtlasPreviewState {
 		streamCameraZ = camera.z;
 		double reach = radius + config.hysteresis() + STREAM_PREFETCH_BLOCKS;
 		streamReach = reach;
+		java.util.Set<String> animatedInReach = new java.util.HashSet<>();
 		for (java.util.Map.Entry<Long, java.util.Set<net.minecraft.client.renderer.texture.TextureAtlasSprite>> entry
 				: streamSections.entrySet()) {
 			long key = entry.getKey();
@@ -424,6 +505,11 @@ public final class AtlasPreviewState {
 			if (distance - SECTION_RADIUS > reach) {
 				requestedStreamSections.remove(key);
 				continue;
+			}
+			for (net.minecraft.client.renderer.texture.TextureAtlasSprite sprite : entry.getValue()) {
+				if (sprite.contents().isAnimated()) {
+					animatedInReach.add(sprite.contents().name().toString());
+				}
 			}
 			if (!requestedStreamSections.add(key)) {
 				continue;
@@ -440,6 +526,7 @@ public final class AtlasPreviewState {
 				);
 			}
 		}
+		activeAnimatedSprites = animatedInReach;
 	}
 
 	public static void clearSectionSpriteUsage(long sectionKey) {
@@ -528,6 +615,10 @@ public final class AtlasPreviewState {
 			} catch (RuntimeException exception) {
 				LoadsOfLods.LOGGER.error("Could not stream virtual texture tile {}", key, exception);
 			}
+		}
+		VirtualTextureGpuCache animatedCache = virtualTextureGpuCache;
+		if (animatedCache != null) {
+			serviceAnimatedTiles(animatedCache, virtualTextureTileBuilder);
 		}
 	}
 
@@ -1398,6 +1489,10 @@ public final class AtlasPreviewState {
 					return;
 				}
 				NearAtlas near = nearAtlas;
+				spriteFrames.put(
+					sprite.contents().name().toString(),
+					animation.steps().get(framePosition).frameIndex()
+				); 
 				if (near != null) {
 					AnimationStep nearStep = animation.steps().get(framePosition);
 					int nearNext = animation.steps().get((framePosition + 1) % animation.steps().size()).frameIndex();
@@ -1550,6 +1645,8 @@ public final class AtlasPreviewState {
 		pendingVirtualTextureQuads.clear();
 		pendingVirtualTextureTiles.clear();
 		animatedVirtualTextureTiles.clear();
+		animatedTiles.clear();
+		spriteFrames.clear();
 		activeVirtualTextureCursor = null;
 		activeVirtualTextureDistanceSquared = Double.POSITIVE_INFINITY;
 		closeVirtualTextureGpuPageTable();
@@ -1765,6 +1862,7 @@ public final class AtlasPreviewState {
 		for (SpriteRegion region : regions) {
 			regionsById.put(region.identifier(), region);
 		}
+		Map<String, AnimatedStrip> strips = new HashMap<>();
 		List<SpriteSource> sources = new ArrayList<>();
 		for (TextureAtlasSprite sprite : ((TextureAtlasAccessor) atlas).loadsOfLods$getSprites()) {
 			SpriteRegion region = regionsById.get(sprite.contents().name());
@@ -1772,7 +1870,16 @@ public final class AtlasPreviewState {
 				continue;
 			}
 			List<MipImage> mipImages = new ArrayList<>();
-			if (!region.animated()) {
+			if (region.animated()) {
+				strips.put(
+					region.identifier().toString(),
+					new AnimatedStrip(
+						((SpriteContentsAccessor) sprite.contents()).loadsOfLods$getMipImages(),
+						region.width(),
+						region.height()
+					)
+				);
+			} else {
 				NativeImage[] images = ((SpriteContentsAccessor) sprite.contents()).loadsOfLods$getMipImages();
 				for (NativeImage image : images) {
 					mipImages.add(new MipImage() {
@@ -1805,7 +1912,7 @@ public final class AtlasPreviewState {
 				mipImages
 			));
 		}
-		return new VirtualTextureTileBuilder(
+		VirtualTextureTileBuilder builder = new VirtualTextureTileBuilder(
 			atlasWidth,
 			atlasHeight,
 			VIRTUAL_TILE_SIZE,
@@ -1813,6 +1920,44 @@ public final class AtlasPreviewState {
 			atlasGeneration,
 			sources
 		);
+		builder.setAnimationFrames((name, mipLevel) -> {
+			AnimatedStrip strip = strips.get(name);
+			Integer frame = spriteFrames.get(name);
+			return strip == null || frame == null ? null : strip.frame(frame, mipLevel);
+		});
+		return builder;
+	}
+
+	// The full-resolution frame strip of an animated sprite. A frame is a view into the strip, not a copy.
+	private record AnimatedStrip(NativeImage[] mips, int frameWidth, int frameHeight) {
+		MipImage frame(int frameIndex, int mipLevel) {
+			if (mipLevel >= mips.length) {
+				return null;
+			}
+			NativeImage image = mips[mipLevel];
+			int columns = Math.max(1, mips[0].getWidth() / Math.max(1, frameWidth));
+			int rows = Math.max(1, mips[0].getHeight() / Math.max(1, frameHeight));
+			int width = Math.max(1, image.getWidth() / columns);
+			int height = Math.max(1, image.getHeight() / rows);
+			int originX = frameIndex % columns * width;
+			int originY = Math.min(rows - 1, frameIndex / columns) * height;
+			return new MipImage() {
+				@Override
+				public int width() {
+					return width;
+				}
+
+				@Override
+				public int height() {
+					return height;
+				}
+
+				@Override
+				public int pixel(int x, int y) {
+					return image.getPixel(originX + x, originY + y);
+				}
+			};
+		}
 	}
 
 	private static int averageSourcePixels(

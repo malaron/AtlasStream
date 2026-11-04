@@ -149,6 +149,28 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 		}
 	}
 
+	// Rewrites the pixels of an already resident tile in place; the page table is unchanged.
+	public synchronized boolean update(VirtualTextureTileKey key, List<NativeImage> mipLevels) {
+		ensureOpen();
+		ResidentTile existing = residentTiles.get(key);
+		if (existing == null) {
+			return false;
+		}
+		if (mipLevels.size() != mipLevelCount) {
+			throw new IllegalArgumentException("Tile upload must include the complete cache mip chain");
+		}
+		validateMipChain(mipLevels);
+		int slotX = existing.slot() % gridWidth;
+		int slotY = existing.slot() / gridWidth;
+		var encoder = RenderSystem.getDevice().createCommandEncoder();
+		for (int mip = 0; mip < mipLevels.size(); mip++) {
+			int mipTileSize = Math.max(1, tileTextureSize >> mip);
+			encoder.writeToTexture(texture, mipLevels.get(mip), mip, 0, slotX * mipTileSize, slotY * mipTileSize);
+		}
+		encoder.submit();
+		return true;
+	}
+
 	public synchronized Integer get(VirtualTextureTileKey key) {
 		ensureOpen();
 		ResidentTile tile = residentTiles.get(key);
