@@ -12,6 +12,7 @@ import dev.isxander.yacl3.api.YetAnotherConfigLib;
 import dev.isxander.yacl3.api.controller.CyclingListControllerBuilder;
 import dev.isxander.yacl3.api.controller.DoubleSliderControllerBuilder;
 import dev.isxander.yacl3.api.controller.LongSliderControllerBuilder;
+import dev.isxander.yacl3.api.controller.TickBoxControllerBuilder;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
@@ -27,6 +28,7 @@ final class LodConfigScreen {
 		double[] hysteresis = {current.hysteresis()};
 		long[] cacheMiB = {current.highResolutionCacheMiB()};
 		int[] factor = {current.downscaleFactor()};
+		boolean[] tint = {current.debugTintLowResolution()};
 
 		Option<Integer> factorOption = Option.<Integer>createBuilder()
 			.name(Component.literal("Texture reduction"))
@@ -69,6 +71,15 @@ final class LodConfigScreen {
 				.step(64L))
 			.build();
 
+		Option<Boolean> tintOption = Option.<Boolean>createBuilder()
+			.name(Component.literal("Debug: tint low-resolution textures"))
+			.description(OptionDescription.of(Component.literal(
+				"Colors the reduced atlas magenta so you can see where it is used. Applies when the preview is rebuilt (reload, then /lods preview-distance)."
+			)))
+			.binding(false, () -> tint[0], value -> tint[0] = value)
+			.controller(TickBoxControllerBuilder::create)
+			.build();
+
 		return YetAnotherConfigLib.createBuilder()
 			.title(Component.literal("Loads of Lods"))
 			.category(ConfigCategory.createBuilder()
@@ -77,6 +88,7 @@ final class LodConfigScreen {
 				.option(distanceOption)
 				.option(hysteresisOption)
 				.option(cacheOption)
+				.option(tintOption)
 				.build())
 			.save(() -> {
 				try {

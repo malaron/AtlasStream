@@ -691,6 +691,11 @@ public final class AtlasPreviewState {
 			for (int level = 1; level < lowMipLevelCount; level++) {
 				mipLevels.add(createMipLevel(mipLevels.get(level - 1), lowRegions, level));
 			}
+			if (LoadsOfLodsClient.getConfig().debugTintLowResolution()) {
+				for (NativeImage mipLevel : mipLevels) {
+					tintMagenta(mipLevel);
+				}
+			}
 			IrisPbrAtlasReducer.Images pbrImages = null;
 			if (reducePbr) {
 				try {
@@ -1522,6 +1527,18 @@ public final class AtlasPreviewState {
 	@FunctionalInterface
 	interface PixelAverager {
 		int average(int first, int second, int third, int fourth);
+	}
+
+	private static void tintMagenta(NativeImage image) {
+		for (int y = 0; y < image.getHeight(); y++) {
+			for (int x = 0; x < image.getWidth(); x++) {
+				int pixel = image.getPixel(x, y);
+				int red = Math.min(255, ((pixel >>> 16) & 0xFF) / 2 + 128);
+				int green = ((pixel >>> 8) & 0xFF) / 3;
+				int blue = Math.min(255, (pixel & 0xFF) / 2 + 128);
+				image.setPixel(x, y, (pixel & 0xFF000000) | (red << 16) | (green << 8) | blue);
+			}
+		}
 	}
 
 	private static NativeImage createMipLevel(NativeImage previous, List<SpriteRegion> regions, int level) {
