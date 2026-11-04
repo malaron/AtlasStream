@@ -98,9 +98,12 @@ final class NearAtlas implements AutoCloseable {
 
 	static NearAtlas create(int width, int height, int mipLevels, ResourceManager resourceManager) {
 		try {
-			if (!RenderSystem.getDevice().getClass().getName().contains("opengl")
-					|| !GL.getCapabilities().GL_ARB_sparse_texture) {
-				LoadsOfLods.LOGGER.info("Sparse textures are unavailable; Iris terrain stays on the reduced atlas");
+			boolean sparse = GL.getCapabilities().GL_ARB_sparse_texture;
+			if (!sparse) {
+				LoadsOfLods.LOGGER.info(
+					"Sparse textures are unavailable (device {}, GL_ARB_sparse_texture={}); Iris terrain stays on the reduced atlas",
+					RenderSystem.getDevice().getClass().getName(), sparse
+				);
 				return null;
 			}
 			int maximum = GL11.glGetInteger(ARBSparseTexture.GL_MAX_SPARSE_TEXTURE_SIZE_ARB);
