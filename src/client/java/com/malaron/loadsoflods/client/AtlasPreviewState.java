@@ -47,7 +47,6 @@ import net.minecraft.server.packs.resources.Resource;
 import net.minecraft.server.packs.resources.ResourceManager;
 
 public final class AtlasPreviewState {
-	private static final int DOWNSCALE_FACTOR = 4;
 	private static final int VIRTUAL_TILE_SIZE = 128;
 	private static final long MAX_PREVIEW_BYTES = 1024L * 1024 * 1024;
 	private static final int MAX_PENDING_TILE_REQUESTS = 8192;
@@ -564,7 +563,7 @@ public final class AtlasPreviewState {
 	}
 
 	private static int selectDownscaleFactor(List<SpriteRegion> regions, int atlasWidth, int atlasHeight) {
-		for (int factor = DOWNSCALE_FACTOR; factor > 1; factor >>= 1) {
+		for (int factor = LoadsOfLodsClient.getConfig().downscaleFactor(); factor > 1; factor >>= 1) {
 			if (atlasWidth % factor != 0 || atlasHeight % factor != 0) {
 				continue;
 			}

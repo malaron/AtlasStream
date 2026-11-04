@@ -13,6 +13,9 @@
 		],
 		"client": [
 			"com.malaron.loadsoflods.client.LoadsOfLodsClient"
+		],
+		"modmenu": [
+			"com.malaron.loadsoflods.client.config.LoadsOfLodsModMenu"
 		]
 	},
 	"mixins": [
@@ -26,5 +29,9 @@
 		"minecraft": "~26.3",
 		"java": ">=25",
 		"fabric-api": "*"
+	},
+	"suggests": {
+		"modmenu": "*",
+		"yet_another_config_lib_v3": ">=3.9.7"
 	}
 }

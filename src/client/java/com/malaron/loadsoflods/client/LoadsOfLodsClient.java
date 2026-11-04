@@ -21,6 +21,16 @@ public class LoadsOfLodsClient implements ClientModInitializer {
 		return config;
 	}
 
+	public static java.nio.file.Path configFile() {
+		return FabricLoader.getInstance().getConfigDir().resolve("loads-of-lods.properties");
+	}
+
+	// Distance, hysteresis and cache budget are read live; the downscale factor applies on the next preview build.
+	public static void updateConfig(LodConfig updated) {
+		LodConfig.save(configFile(), updated);
+		config = updated;
+	}
+
 	@Override
 	public void onInitializeClient() {
 		AtlasBuildCommand.register();

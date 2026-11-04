@@ -7,14 +7,22 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Properties;
 
-public record LodConfig(double highResolutionDistance, double hysteresis, long highResolutionCacheMiB) {
+public record LodConfig(double highResolutionDistance, double hysteresis, long highResolutionCacheMiB, int downscaleFactor) {
 	private static final double DEFAULT_HIGH_RESOLUTION_DISTANCE = 128.0;
 	private static final double DEFAULT_HYSTERESIS = 16.0;
 	public static final long DEFAULT_HIGH_RESOLUTION_CACHE_MIB = 1024;
-	private static final long MIN_HIGH_RESOLUTION_CACHE_MIB = 64;
-	private static final long MAX_HIGH_RESOLUTION_CACHE_MIB = 16 * 1024;
+	public static final int DEFAULT_DOWNSCALE_FACTOR = 4;
+	public static final long MIN_HIGH_RESOLUTION_CACHE_MIB = 64;
+	public static final long MAX_HIGH_RESOLUTION_CACHE_MIB = 16 * 1024;
+
+	public LodConfig(double highResolutionDistance, double hysteresis, long highResolutionCacheMiB) {
+		this(highResolutionDistance, hysteresis, highResolutionCacheMiB, DEFAULT_DOWNSCALE_FACTOR);
+	}
 
 	public LodConfig {
+		if (downscaleFactor != 2 && downscaleFactor != 4 && downscaleFactor != 8) {
+			throw new IllegalArgumentException("Downscale factor must be 2, 4 or 8");
+		}
 		if (!Double.isFinite(highResolutionDistance) || highResolutionDistance <= 0.0) {
 			throw new IllegalArgumentException("High-resolution distance must be a finite positive number");
 		}
@@ -45,10 +53,11 @@ public record LodConfig(double highResolutionDistance, double hysteresis, long h
 		LodConfig config = new LodConfig(
 			readNumber(properties, "highResolutionDistance", DEFAULT_HIGH_RESOLUTION_DISTANCE),
 			readNumber(properties, "hysteresis", DEFAULT_HYSTERESIS),
-			readLong(properties, "highResolutionCacheMiB", DEFAULT_HIGH_RESOLUTION_CACHE_MIB)
+			readLong(properties, "highResolutionCacheMiB", DEFAULT_HIGH_RESOLUTION_CACHE_MIB),
+			(int) readLong(properties, "downscaleFactor", DEFAULT_DOWNSCALE_FACTOR)
 		);
 		if (!Files.exists(file)) {
-			writeDefaults(file, config);
+			save(file, config);
 		}
 		return config;
 	}
@@ -77,11 +86,12 @@ public record LodConfig(double highResolutionDistance, double hysteresis, long h
 		}
 	}
 
-	private static void writeDefaults(Path file, LodConfig config) {
+	public static void save(Path file, LodConfig config) {
 		Properties properties = new Properties();
 		properties.setProperty("highResolutionDistance", Double.toString(config.highResolutionDistance()));
 		properties.setProperty("hysteresis", Double.toString(config.hysteresis()));
 		properties.setProperty("highResolutionCacheMiB", Long.toString(config.highResolutionCacheMiB()));
+		properties.setProperty("downscaleFactor", Integer.toString(config.downscaleFactor()));
 		try {
 			Path parent = file.getParent();
 			if (parent != null) {
@@ -91,7 +101,7 @@ public record LodConfig(double highResolutionDistance, double hysteresis, long h
 				properties.store(output, "Loads of Lods client configuration (distances in blocks)");
 			}
 		} catch (IOException exception) {
-			throw new IllegalStateException("Could not create LOD configuration at " + file, exception);
+			throw new IllegalStateException("Could not write LOD configuration at " + file, exception);
 		}
 	}
 }

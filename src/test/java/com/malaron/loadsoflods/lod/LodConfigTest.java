@@ -19,9 +19,28 @@ class LodConfigTest {
 	void createsDefaultConfigurationWhenMissing() throws IOException {
 		Path file = temporaryDirectory.resolve("config").resolve("loads-of-lods.properties");
 
-		assertEquals(new LodConfig(128.0, 16.0, 1024), LodConfig.load(file));
+		assertEquals(new LodConfig(128.0, 16.0, 1024, 4), LodConfig.load(file));
 		assertTrue(Files.exists(file));
 		assertTrue(Files.readString(file).contains("highResolutionCacheMiB=1024"));
+		assertTrue(Files.readString(file).contains("downscaleFactor=4"));
+	}
+
+	@Test
+	void savesAndReloadsEditedValues() {
+		Path file = temporaryDirectory.resolve("loads-of-lods.properties");
+		LodConfig edited = new LodConfig(96.0, 8.0, 512, 2);
+
+		LodConfig.save(file, edited);
+
+		assertEquals(edited, LodConfig.load(file));
+	}
+
+	@Test
+	void rejectsUnsupportedDownscaleFactor() throws IOException {
+		Path file = temporaryDirectory.resolve("loads-of-lods.properties");
+		Files.writeString(file, "downscaleFactor=3\n");
+
+		assertThrows(IllegalArgumentException.class, () -> LodConfig.load(file));
 	}
 
 	@Test

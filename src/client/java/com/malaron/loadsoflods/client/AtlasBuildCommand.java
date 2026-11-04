@@ -17,7 +17,6 @@ import net.minecraft.network.chat.Component;
 import static net.fabricmc.fabric.api.client.command.v2.ClientCommands.literal;
 
 public final class AtlasBuildCommand {
-	private static final int DOWNSCALE_FACTOR = 4;
 	private static final AtomicBoolean BUILD_RUNNING = new AtomicBoolean();
 
 	private AtlasBuildCommand() {
@@ -250,7 +249,7 @@ public final class AtlasBuildCommand {
 				AtlasBuildResult result = AtlasBuilder.build(
 					resourceManager,
 					outputDirectory,
-					DOWNSCALE_FACTOR
+					LoadsOfLodsClient.getConfig().downscaleFactor()
 				);
 				source.getClient().execute(() -> source.sendFeedback(
 					Component.literal(
