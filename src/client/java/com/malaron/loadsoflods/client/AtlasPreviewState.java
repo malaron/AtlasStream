@@ -52,6 +52,7 @@ public final class AtlasPreviewState {
 	private static final long MAX_PREVIEW_BYTES = 2048L * 1024 * 1024;
 	private static final int MAX_PENDING_TILE_REQUESTS = 8192;
 	private static final int MAX_UV_QUADS_PER_TICK = 128;
+	private static int animatedTileFailuresLogged;
 	private static final int MAX_TILE_KEYS_PER_TICK = 512;
 	private static final int MAX_TILE_UPLOADS_PER_TICK = 4;
 	private static final long MAX_TILE_UPLOAD_TIME_NANOS_PER_TICK = 4_000_000L;
@@ -365,6 +366,7 @@ public final class AtlasPreviewState {
 
 	private static final double SECTION_RADIUS = 14.0;
 	private static final double STREAM_PREFETCH_BLOCKS = 32.0;
+	private static final int STREAM_MIP0_BLOCKS = 48;
 	private static final int STREAM_REFRESH_TICKS = 5;
 	private static final int STREAM_REREQUEST_REFRESHES = 20;
 	private static int streamRerequestCounter;
@@ -400,6 +402,90 @@ public final class AtlasPreviewState {
 	private static final java.util.LinkedHashMap<VirtualTextureTileKey, PreparedTile> preparingTiles =
 		new java.util.LinkedHashMap<>();
 
+	private static final java.util.LinkedHashMap<VirtualTextureTileKey, PreparedTile> loadingTiles =
+		new java.util.LinkedHashMap<>();
+	private static final int MAX_TILES_LOADING = 64;
+	private static final int MAX_TILE_UPLOADS_PER_FRAME_TICK = 32;
+
+	// New tiles are built on worker threads in distance order; the render thread only writes finished ones.
+	private static void submitPendingTiles(VirtualTextureGpuCache cache, VirtualTextureTileBuilder builder) {
+		int cacheMipLevels = Math.min(
+			Integer.numberOfTrailingZeros(VIRTUAL_TILE_SIZE) + 1,
+			virtualTextureGpuPageTable.layout().mipLevelCount()
+		);
+		while (loadingTiles.size() < MAX_TILES_LOADING) {
+			VirtualTextureTileKey key = pendingVirtualTextureTiles.poll();
+			if (key == null) {
+				return;
+			}
+			if (cache.get(key) != null || loadingTiles.containsKey(key)) {
+				continue;
+			}
+			AnimatedTile snapshot = snapshotAnimatedTile(builder, key);
+			loadingTiles.put(key, new PreparedTile(snapshot, animatedTileExecutor.submit(
+				() -> buildTileImages(builder, key, cacheMipLevels)
+			)));
+		}
+	}
+
+	private static List<NativeImage> buildTileImages(
+		VirtualTextureTileBuilder builder,
+		VirtualTextureTileKey key,
+		int cacheMipLevels
+	) {
+		List<TileMip> builtMips = builder.build(key, cacheMipLevels);
+		List<NativeImage> images = new ArrayList<>(builtMips.size());
+		try {
+			for (TileMip mip : builtMips) {
+				NativeImage image = new NativeImage(mip.width(), mip.height(), true);
+				images.add(image);
+				for (int y = 0; y < mip.height(); y++) {
+					for (int x = 0; x < mip.width(); x++) {
+						image.setPixel(x, y, mip.pixel(x, y));
+					}
+				}
+			}
+			return images;
+		} catch (RuntimeException exception) {
+			closeImages(images);
+			throw exception;
+		}
+	}
+
+	private static void uploadLoadedTiles(VirtualTextureGpuCache cache) {
+		long start = System.nanoTime();
+		int uploads = 0;
+		java.util.Iterator<java.util.Map.Entry<VirtualTextureTileKey, PreparedTile>> iterator =
+			loadingTiles.entrySet().iterator();
+		while (iterator.hasNext() && uploads < MAX_TILE_UPLOADS_PER_FRAME_TICK) {
+			if (uploads > 0 && System.nanoTime() - start >= MAX_TILE_UPLOAD_TIME_NANOS_PER_TICK) {
+				break;
+			}
+			java.util.Map.Entry<VirtualTextureTileKey, PreparedTile> entry = iterator.next();
+			if (!entry.getValue().images().isDone()) {
+				continue;
+			}
+			iterator.remove();
+			List<NativeImage> images = null;
+			try {
+				images = entry.getValue().images().get();
+				if (cache.get(entry.getKey()) == null) {
+					cache.upload(entry.getKey(), images);
+					if (!entry.getValue().snapshot().names().isEmpty()) {
+						animatedTiles.put(entry.getKey(), entry.getValue().snapshot());
+					}
+					uploads++;
+				}
+			} catch (Exception exception) {
+				LoadsOfLods.LOGGER.error("Could not stream virtual texture tile {}", entry.getKey(), exception);
+			} finally {
+				if (images != null) {
+					closeImages(images);
+				}
+			}
+		}
+	}
+
 	private record AnimatedTile(List<String> names, FrameState[] frames) {
 	}
 
@@ -407,16 +493,18 @@ public final class AtlasPreviewState {
 	}
 
 	private static void discardPreparedTiles() {
-		for (PreparedTile prepared : preparingTiles.values()) {
-			animatedTileExecutor.submit(() -> {
-				try {
-					closeImages(prepared.images().get());
-				} catch (Exception ignored) {
-					// The build failed or was interrupted, so there is nothing to close.
-				}
-			});
+		for (java.util.LinkedHashMap<VirtualTextureTileKey, PreparedTile> tiles : List.of(preparingTiles, loadingTiles)) {
+			for (PreparedTile prepared : tiles.values()) {
+				animatedTileExecutor.submit(() -> {
+					try {
+						closeImages(prepared.images().get());
+					} catch (Exception ignored) {
+						// The build failed or was interrupted, so there is nothing to close.
+					}
+				});
+			}
+			tiles.clear();
 		}
-		preparingTiles.clear();
 	}
 
 	// Tile pixels are built on worker threads; the render thread only writes finished tiles to the GPU.
@@ -676,7 +764,13 @@ public final class AtlasPreviewState {
 				activeVirtualTextureDistanceSquared = quad.distanceSquared();
 			}
 			VirtualTextureTileKey key = activeVirtualTextureCursor.next();
-			if (!animatedVirtualTextureTiles.contains(key)) {
+			// A mip level is only sampled within a limited distance, and mips as coarse as the low atlas add nothing.
+			// Requesting every level for every section would overflow the cache and evict the nearby tiles.
+			double effectiveDistance = Math.sqrt(activeVirtualTextureDistanceSquared) - SECTION_RADIUS;
+			int lowAtlasMip = Integer.numberOfTrailingZeros(Math.max(1, lowAtlasDownscaleFactor));
+			boolean wanted = key.mipLevel() < lowAtlasMip
+				&& effectiveDistance <= (STREAM_MIP0_BLOCKS << key.mipLevel());
+			if (wanted && !animatedVirtualTextureTiles.contains(key)) {
 				VirtualTextureGpuCache cache = virtualTextureGpuCache;
 				if (cache != null) {
 					if (cache.get(key) == null) {
@@ -691,28 +785,11 @@ public final class AtlasPreviewState {
 			}
 		}
 
-		long uploadStartNanos = System.nanoTime();
-		for (int uploads = 0; uploads < MAX_TILE_UPLOADS_PER_TICK; uploads++) {
-			if (uploads > 0 && System.nanoTime() - uploadStartNanos >= MAX_TILE_UPLOAD_TIME_NANOS_PER_TICK) {
-				break;
-			}
-			VirtualTextureTileKey key = pendingVirtualTextureTiles.poll();
-			if (key == null) {
-				break;
-			}
-			try {
-				VirtualTextureGpuCache cache = virtualTextureGpuCache;
-				if (cache != null && cache.get(key) == null) {
-					uploadHighResolutionTile(key);
-				}
-			} catch (VirtualTextureTileBuilder.AnimatedTileException ignored) {
-				// Animated sprites are intentionally left on the original atlas for now.
-				if (animatedVirtualTextureTiles.size() < MAX_PENDING_TILE_REQUESTS) {
-					animatedVirtualTextureTiles.add(key);
-				}
-			} catch (RuntimeException exception) {
-				LoadsOfLods.LOGGER.error("Could not stream virtual texture tile {}", key, exception);
-			}
+		VirtualTextureGpuCache streamCache = virtualTextureGpuCache;
+		VirtualTextureTileBuilder streamBuilder = virtualTextureTileBuilder;
+		if (streamCache != null && streamBuilder != null) {
+			uploadLoadedTiles(streamCache);
+			submitPendingTiles(streamCache, streamBuilder);
 		}
 		VirtualTextureGpuCache animatedCache = virtualTextureGpuCache;
 		if (animatedCache != null) {
