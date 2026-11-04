@@ -366,6 +366,8 @@ public final class AtlasPreviewState {
 	private static final double SECTION_RADIUS = 14.0;
 	private static final double STREAM_PREFETCH_BLOCKS = 32.0;
 	private static final int STREAM_REFRESH_TICKS = 5;
+	private static final int STREAM_REREQUEST_REFRESHES = 20;
+	private static int streamRerequestCounter;
 	private static final java.util.Map<Long, java.util.Set<net.minecraft.client.renderer.texture.TextureAtlasSprite>> streamSections =
 		new java.util.concurrent.ConcurrentHashMap<>();
 	private static final java.util.Set<Long> requestedStreamSections = java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -567,6 +569,12 @@ public final class AtlasPreviewState {
 			return;
 		}
 		streamRefreshTicks = STREAM_REFRESH_TICKS;
+		// Tiles can be evicted while their section stays marked as requested, so ask again now and then. Tiles that
+		// are still resident are skipped when the request is planned.
+		if (++streamRerequestCounter >= STREAM_REREQUEST_REFRESHES) {
+			streamRerequestCounter = 0;
+			requestedStreamSections.clear();
+		}
 		if (streamGeneration != generation) {
 			// Requests recorded for an older atlas generation are discarded, so every section must be requested again.
 			streamGeneration = generation;
