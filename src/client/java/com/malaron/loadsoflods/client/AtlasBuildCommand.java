@@ -57,12 +57,40 @@ public final class AtlasBuildCommand {
 							.executes(context -> reportVram(context.getSource()))
 					)
 					.then(
+						literal("glinfo")
+							.requires(net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource::attended)
+							.executes(context -> reportGlInfo(context.getSource()))
+					)
+					.then(
 						literal("build-atlases")
 							.requires(net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource::attended)
 							.executes(context -> buildAtlases(context.getSource()))
 					)
 			)
 		);
+	}
+
+	private static int reportGlInfo(
+		net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource source
+	) {
+		org.lwjgl.opengl.GLCapabilities caps = org.lwjgl.opengl.GL.getCapabilities();
+		StringBuilder line = new StringBuilder("sparse_texture=" + caps.GL_ARB_sparse_texture
+			+ " sparse_texture2=" + caps.GL_ARB_sparse_texture2
+			+ " bindless=" + caps.GL_ARB_bindless_texture
+			+ " tex_storage=" + caps.GL_ARB_texture_storage);
+		if (caps.GL_ARB_sparse_texture) {
+			line.append(" maxSparse2D=").append(org.lwjgl.opengl.GL11.glGetInteger(org.lwjgl.opengl.ARBSparseTexture.GL_MAX_SPARSE_TEXTURE_SIZE_ARB));
+			for (int format : new int[] {org.lwjgl.opengl.GL11.GL_RGBA8}) {
+				int[] pageX = new int[1];
+				int[] pageY = new int[1];
+				org.lwjgl.opengl.GL42.glGetInternalformativ(org.lwjgl.opengl.GL11.GL_TEXTURE_2D, format, org.lwjgl.opengl.ARBSparseTexture.GL_VIRTUAL_PAGE_SIZE_X_ARB, pageX);
+				org.lwjgl.opengl.GL42.glGetInternalformativ(org.lwjgl.opengl.GL11.GL_TEXTURE_2D, format, org.lwjgl.opengl.ARBSparseTexture.GL_VIRTUAL_PAGE_SIZE_Y_ARB, pageY);
+				line.append(" rgba8Page=").append(pageX[0]).append('x').append(pageY[0]);
+			}
+		}
+		source.sendFeedback(Component.literal(line.toString()));
+		LoadsOfLods.LOGGER.info("GL info: {}", line);
+		return 1;
 	}
 
 	private static int reportVram(
