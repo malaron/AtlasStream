@@ -147,7 +147,12 @@ stitched sprite mipmaps. Tiles touching animated sprites are drawn from the
 sprite's current full-resolution frame and rewritten in place when it changes,
 only for sprites used by sections within the streaming range (up to 8 tile
 rewrites and about 3 ms per tick, built on worker threads). Interpolated
-animations are blended in 4 steps between frames. Sodium's chunk shader is patched at compile time to
+animations are blended in 4 steps between frames. New tiles are also built on
+worker threads, nearest first, and the render thread only uploads finished
+tiles within a small time budget. Each mip level is requested only within its
+useful range (about 48 blocks for mip 0, doubling per level), and levels as
+coarse as the low atlas are never requested, which keeps the cache from
+overflowing. Sodium's chunk shader is patched at compile time to
 sample resident virtual tiles in the high-resolution and translucent terrain
 passes and use the
 low-resolution atlas on cache misses. Mip selection comes from the UV derivatives
