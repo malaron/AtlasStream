@@ -28,20 +28,19 @@ resident high-resolution tiles, and distant sections use the reduced atlas;
 the full high-resolution block-atlas GPU allocation is released. Because
 Minecraft shares this atlas with other block-atlas users, they also see the
 low-resolution fallback in this mode. Reload resource packs to restore the
-full-resolution atlas. With an Iris shaderpack active, terrain consistently
-uses the reduced albedo atlas instead of splitting sections between high and
-low resolutions. This avoids the visible hard boundary and the extra two-pass
-draw overhead. Iris normal (`_n`) and specular (`_s`) LabPBR maps are reduced
-to the same ratio with per-channel averaging (normals are renormalized; alpha,
-which carries POM height and emission, is averaged independently rather than
-used as a weight). Animated PBR sprites use their first frame. The mod registers
-the reduced atlas with Iris's texture
-tracker so Iris still finds them. The full-resolution albedo atlas is released
-in this mode to save its VRAM, and no high-resolution tile cache is used (only
-its minimum allocation); nearby terrain also remains reduced
-until a reliable shader-level transition is available. Translucent terrain
-remains on the low atlas to avoid cross-atlas sorting artifacts when distance
-LOD is active. Animated low-atlas sprites follow Minecraft's frame sequence
+full-resolution atlas. With an Iris shaderpack active, the reduced atlas (albedo
+plus normal/specular LabPBR maps, averaged per channel to the same ratio) serves
+distant terrain, and a separate full-size *sparse* "near atlas" (needs
+`GL_ARB_sparse_texture`) serves nearby terrain, held items, entities and
+particles. The near atlas commits GPU pages only for sprites actually used, so
+the full-resolution VRAM is mostly not spent. Its albedo and PBR content is
+streamed from the resource pack on worker threads; PBR maps stay vanilla
+(first frame only) while albedo animates, interpolated like vanilla, but only
+for sprites used by sections that are in range and in view. At a distance of 0
+chunks, everything uses the low atlas and nothing animates in the near atlas.
+The mod registers the atlases with Iris's texture tracker so Iris still finds
+them. Translucent terrain remains on the low atlas to avoid cross-atlas sorting
+artifacts. Animated low-atlas sprites follow Minecraft's frame sequence
 and interpolation state. Sodium's packed local section indices are decoded
 and combined with their owning region coordinates before applying the
 world-space distance policy. Sodium's per-region batches are rebuilt from each filtered section
@@ -63,7 +62,10 @@ downscaleFactor=4
 `downscaleFactor` (2, 4 or 8) is the per-axis reduction of the low-resolution
 atlas, including Iris's normal/specular atlases. Larger values save more VRAM;
 1:2 uses roughly 4x the atlas VRAM of 1:4. It applies the next time the
-distance preview is built (`/lods preview-distance`).
+distance preview is built (`/lods preview-distance`), as does
+`debugTintLowResolution` (tints low-res terrain magenta for testing).
+`highResolutionDistance` is stored in blocks but edited in chunks in the
+config screen; 0 disables near terrain entirely.
 
 All settings can be edited in game via Mod Menu (21.0.0 for 26.3) when Yet
 Another Config Lib is installed; both are optional. `/lods vram` prints a VRAM

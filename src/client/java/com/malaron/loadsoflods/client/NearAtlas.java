@@ -358,20 +358,14 @@ final class NearAtlas implements AutoCloseable {
 
 	List<String> debugLines() {
 		long bytes = albedo.committedBytes + normal.committedBytes + specular.committedBytes;
-		List<String> names = activeSprites.stream().map(s -> s.contents().name().getPath()
-			+ (alwaysAnimated.contains(s) ? "*" : "")).sorted().toList();
-		List<String> lines = new java.util.ArrayList<>(List.of(
+		return List.of(
 			"Near sparse atlas: " + residentSprites + " sprites resident, " + (jobs.size() + incoming.size())
 				+ " pending, " + failedSprites + " failed",
 			"Near animation: " + activeSprites.size() + " sprites active, " + uploadsPerSecond + " uploads/s, backlog avg "
-				+ String.format(java.util.Locale.ROOT, "%.0f", averageBacklog) + " peak " + displayedPeak
-		));
-		for (int i = 0; i < names.size() && i < 24; i += 4) {
-			lines.add("  " + String.join(", ", names.subList(i, Math.min(names.size(), i + 4))));
-		}
-		lines.add("Near committed VRAM: " + String.format(java.util.Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024.0))
-			+ (failed ? " (disabled after an error)" : ""));
-		return lines;
+				+ String.format(java.util.Locale.ROOT, "%.0f", averageBacklog) + " peak " + displayedPeak,
+			"Near committed VRAM: " + String.format(java.util.Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024.0))
+				+ (failed ? " (disabled after an error)" : "")
+		);
 	}
 
 	private void startJob(TextureAtlasSprite sprite) {
