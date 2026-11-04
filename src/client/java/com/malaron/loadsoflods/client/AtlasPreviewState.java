@@ -2068,8 +2068,8 @@ public final class AtlasPreviewState {
 		);
 		builder.setAnimationFrames((name, mipLevel) -> {
 			AnimatedStrip strip = strips.get(name);
-			FrameState state = spriteFrames.get(name);
-			return strip == null || state == null ? null : strip.frame(state, mipLevel);
+			FrameState state = spriteFrames.getOrDefault(name, FrameState.FIRST);
+			return strip == null ? null : strip.frame(state, mipLevel);
 		});
 		return builder;
 	}
