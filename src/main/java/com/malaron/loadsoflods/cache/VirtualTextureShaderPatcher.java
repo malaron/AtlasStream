@@ -16,6 +16,8 @@ uniform sampler2D u_VirtualAtlasMetadata;
 
 bool loadsOfLodsLookupVirtualTile(
     vec2 uv,
+    vec2 du,
+    vec2 dv,
     out int slot,
     out vec2 localUv,
     out vec2 atlasMipSize,
@@ -27,8 +29,10 @@ bool loadsOfLodsLookupVirtualTile(
         round(metadata.r * 255.0) + round(metadata.g * 255.0) * 256.0,
         round(metadata.b * 255.0) + round(metadata.a * 255.0) * 256.0
     );
-    int mipShift = max(int(round(log2(float(atlasSize.x) / float(textureSize(u_BlockTex, 0).x)))), 0);
-    float requestedLod = max(textureQueryLod(u_BlockTex, uv).x + float(mipShift), 0.0);
+    // textureQueryLod clamps to the reduced atlas's mip range and would hide the finest virtual mips.
+    vec2 dx = du * vec2(atlasSize);
+    vec2 dy = dv * vec2(atlasSize);
+    float requestedLod = max(0.5 * log2(max(max(dot(dx, dx), dot(dy, dy)), 1e-8)), 0.0);
     int mipLevel = min(int(floor(requestedLod)), int(round(mipMetadata.r * 255.0)) - 1);
     ivec2 mipSize = max(ivec2(1), atlasSize >> mipLevel);
     ivec2 texel = clamp(ivec2(floor(uv * vec2(mipSize))), ivec2(0), mipSize - 1);
@@ -62,7 +66,7 @@ vec4 loadsOfLodsSampleVirtualOrAtlas(vec2 uv, vec2 du, vec2 dv) {
     vec2 localUv;
     vec2 atlasMipSize;
     vec2 cacheSize;
-    if (loadsOfLodsLookupVirtualTile(uv, slot, localUv, atlasMipSize, cacheSize)) {
+    if (loadsOfLodsLookupVirtualTile(uv, du, dv, slot, localUv, atlasMipSize, cacheSize)) {
         vec2 tileScale = atlasMipSize / 128.0;
         float edgeDistance = min(
             min(localUv.x, localUv.y),
