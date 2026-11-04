@@ -374,7 +374,7 @@ public final class AtlasPreviewState {
 	private static volatile java.util.Set<String> activeAnimatedSprites = java.util.Set.of();
 	// Displayed frame (strip index) of every animated sprite, updated each tick by updateAnimatedFrames.
 	private static final java.util.Map<String, FrameState> spriteFrames = new java.util.concurrent.ConcurrentHashMap<>();
-	private static final int BLEND_STEPS = 16;
+	private static final int BLEND_STEPS = 4;
 
 	// frame is the strip index shown, next the one it blends toward by blend/BLEND_STEPS (0 when not blending).
 	private record FrameState(int frame, int next, int blend) {
@@ -382,11 +382,11 @@ public final class AtlasPreviewState {
 	}
 	private static final java.util.LinkedHashMap<VirtualTextureTileKey, AnimatedTile> animatedTiles =
 		new java.util.LinkedHashMap<>();
-	private static final int MAX_ANIMATED_TILES_IN_FLIGHT = 24;
-	private static final int MAX_ANIMATED_TILE_UPLOADS_PER_TICK = 24;
+	private static final int MAX_ANIMATED_TILES_	IN_FLIGHT = 48;
+		private static final int MAX_ANIMATED_TILE_UPLOADS_PER_TICK = 48;
 	private static final long MAX_ANIMATED_TILE_UPDATE_NANOS = 3_000_000L;
 	private static final java.util.concurrent.ExecutorService animatedTileExecutor =
-		java.util.concurrent.Executors.newFixedThreadPool(2, runnable -> {
+		java.util.concurrent.Executors.newFixedThreadPool(4, runnable -> {
 			Thread thread = new Thread(runnable, "Loads of Lods animated tiles");
 			thread.setDaemon(true);
 			return thread;
