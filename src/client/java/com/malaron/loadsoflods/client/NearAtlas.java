@@ -647,6 +647,12 @@ final class NearAtlas implements AutoCloseable {
 				}
 				candidates.poll();
 				evict(victim);
+				if (needed.contains(victim)) {
+					// Still wanted, but farther than the sprite taking its slot: queue it behind nearer ones
+					// instead of letting the next refresh re-request it and win the slot back.
+					requested.add(victim);
+					waitingForSlot.add(victim);
+				}
 				evictions++;
 			}
 			checkGl("releasing sparse pages");
