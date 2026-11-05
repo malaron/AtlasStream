@@ -68,6 +68,14 @@ public abstract class TextureAtlasVirtualMixin implements VirtualAtlasFlag {
 		var accessor = (AbstractTextureAccessor) (Object) this;
 		accessor.loadsOfLods$setTexture(placeholder);
 		accessor.loadsOfLods$setTextureView(device.createTextureView(placeholder));
+		// Until the reduced atlas is built the placeholder is all terrain samples; give it a neutral color instead
+		// of whatever the driver leaves in uninitialized memory.
+		try (var fill = new com.mojang.blaze3d.platform.NativeImage(1, 1, false)) {
+			fill.setPixel(0, 0, 0xFF6E7F66);
+			var encoder = device.createCommandEncoder();
+			encoder.writeToTexture(placeholder, fill);
+			encoder.submit();
+		}
 		width = newWidth;
 		height = newHeight;
 		maxMipLevel = newMipLevel;

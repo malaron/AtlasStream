@@ -187,6 +187,11 @@ public final class AtlasPreviewState {
 				if (enableDistancePreview) {
 					SodiumLodBridge.scheduleVisibleTerrainRebuild();
 				}
+				if (reloadBuildStartNanos != 0L) {
+					LoadsOfLods.LOGGER.info("Reduced atlas build and activation took {} ms",
+						(System.nanoTime() - reloadBuildStartNanos) / 1_000_000L);
+					reloadBuildStartNanos = 0L;
+				}
 				feedback.accept(
 					net.minecraft.network.chat.Component.literal(
 						(enableDistancePreview
@@ -1066,6 +1071,7 @@ public final class AtlasPreviewState {
 	}
 
 	private static boolean reloadRebuildPending;
+	private static long reloadBuildStartNanos;
 	// Iris loads PBR atlases lazily, possibly after our rebuild has started, so keep skipping until it finishes.
 	private static boolean reloadBuildRunning;
 	private static int reloadRebuildTicks = -1;
@@ -1123,6 +1129,7 @@ public final class AtlasPreviewState {
 			return;
 		}
 		LoadsOfLods.LOGGER.info("Rebuilding the distance preview after a resource reload");
+		reloadBuildStartNanos = System.nanoTime();
 		reloadBuildRunning = true;
 		deferActivationUntilIris = early && !SodiumLodBridge.isIrisShaderPackInUse();
 		try {

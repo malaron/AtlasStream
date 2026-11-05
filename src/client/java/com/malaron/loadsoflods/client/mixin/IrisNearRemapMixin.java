@@ -85,7 +85,7 @@ vec2 loadsOfLodsNearRemap(vec2 uv) {
 					);
 				}
 			);
-			if (midCount[0] == 0 && !midLogged) {
+			if (midCount[0] == 0 && !midLogged && replaced.contains("mc_midTexCoord")) {
 				midLogged = true;
 				int at = replaced.indexOf("mc_midTexCoord");
 				LoadsOfLods.LOGGER.warn("Near UV remap did not patch mc_midTexCoord; shader text: {}",
