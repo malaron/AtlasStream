@@ -189,6 +189,20 @@ public final class SodiumLodBridge {
 		}
 	}
 
+	// The remap texture is only bound while the near atlas is the albedo atlas of the pass; otherwise a 1x1
+	// placeholder makes the vertex shader leave UVs untouched.
+	public static com.mojang.renderpearl.api.textures.GpuTextureView nearRemapForCurrentPass() {
+		if (ACTIVE_LOD.get() == SectionLod.HIGH_RESOLUTION
+				&& AtlasPreviewState.isDistancePreviewEnabled()
+				&& isIrisShaderPackInUse()) {
+			com.mojang.renderpearl.api.textures.GpuTextureView remap = AtlasPreviewState.nearRemapView();
+			if (remap != null) {
+				return remap;
+			}
+		}
+		return AtlasPreviewState.nearRemapPlaceholder();
+	}
+
 	public static com.mojang.renderpearl.api.textures.GpuTextureView lowAtlasForCurrentPass() {
 		if (AtlasPreviewState.isDistancePreviewEnabled()
 				&& AtlasPreviewState.isNearAtlasActive()

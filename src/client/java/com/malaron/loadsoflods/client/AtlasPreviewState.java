@@ -300,7 +300,7 @@ public final class AtlasPreviewState {
 	// Non-terrain draws (held blocks, falling blocks) sample the blocks atlas through its texture slot.
 	public static GpuTextureView nearAtlasViewForSlot(Object atlas) {
 		NearAtlas near = nearAtlas;
-		if (near == null || guiItemDraw || atlas != previewedAtlas || !near.isUsable() || !SodiumLodBridge.isIrisShaderPackInUse()) {
+		if (near == null || near.isCompact() || guiItemDraw || atlas != previewedAtlas || !near.isUsable() || !SodiumLodBridge.isIrisShaderPackInUse()) {
 			return null;
 		}
 		return near.albedoView();
@@ -308,10 +308,35 @@ public final class AtlasPreviewState {
 
 	public static GpuTexture nearAtlasTextureForSlot(Object atlas) {
 		NearAtlas near = nearAtlas;
-		if (near == null || guiItemDraw || atlas != previewedAtlas || !near.isUsable() || !SodiumLodBridge.isIrisShaderPackInUse()) {
+		if (near == null || near.isCompact() || guiItemDraw || atlas != previewedAtlas || !near.isUsable() || !SodiumLodBridge.isIrisShaderPackInUse()) {
 			return null;
 		}
 		return near.albedoTexture();
+	}
+
+	public static GpuTextureView nearRemapView() {
+		NearAtlas near = nearAtlas;
+		return near != null && near.isUsable() && near.isCompact() ? near.remapView() : null;
+	}
+
+	private static GpuTexture nearRemapPlaceholderTexture;
+	private static GpuTextureView nearRemapPlaceholderView;
+
+	public static synchronized GpuTextureView nearRemapPlaceholder() {
+		if (nearRemapPlaceholderView == null) {
+			var device = RenderSystem.getDevice();
+			nearRemapPlaceholderTexture = device.createTexture(
+				"Loads of Lods near remap placeholder",
+				GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_TEXTURE_BINDING,
+				com.mojang.renderpearl.api.GpuFormat.RGBA8_UNORM,
+				1,
+				1,
+				1,
+				1
+			);
+			nearRemapPlaceholderView = device.createTextureView(nearRemapPlaceholderTexture);
+		}
+		return nearRemapPlaceholderView;
 	}
 
 	public static void recordSpriteUsage(net.minecraft.client.renderer.texture.TextureAtlasSprite sprite) {

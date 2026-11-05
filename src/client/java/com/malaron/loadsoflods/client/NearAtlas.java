@@ -41,6 +41,7 @@ import org.lwjgl.system.MemoryUtil;
 // layout, so terrain UVs are unchanged, but physical memory is committed only for sprites terrain actually uses.
 final class NearAtlas implements AutoCloseable {
 	private static final int PAGE = 128;
+	private static final int MAX_COMPACT_SIZE = 16384;
 	private static final int DEFAULT_NORMAL = 0xFF8080FF;
 	private static final int DEFAULT_SPECULAR = 0;
 	private static final int MAX_NEW_JOBS_PER_TICK = 8;
@@ -49,8 +50,23 @@ final class NearAtlas implements AutoCloseable {
 	private static final int MAX_ANIMATION_UPLOADS_PER_TICK = 24;
 	private static final FrameKey FIRST_FRAME = new FrameKey(0, 0, 0.0F);
 
+	// Dimensions of the physical textures. In compact mode they are smaller than the vanilla layout (bigWidth x
+	// bigHeight) and sprites live in slots found through the remap texture.
 	private final int width;
 	private final int height;
+	private final int bigWidth;
+	private final int bigHeight;
+	private final boolean compact;
+	private final int cell;
+	private final int cellsX;
+	private final int cellsY;
+	private int remapId;
+	private GpuTexture remapTexture;
+	private GpuTextureView remapView;
+	private final List<int[]> shelves = new ArrayList<>();
+	private final java.util.Map<Long, java.util.ArrayDeque<int[]>> freeSlots = new java.util.HashMap<>();
+	private int shelfCursorY;
+	private boolean misalignedLogged;
 	private final int mipLevels;
 	private final ResourceManager resourceManager;
 	private final Layer albedo;
@@ -106,9 +122,25 @@ final class NearAtlas implements AutoCloseable {
 	private volatile boolean closed;
 	private volatile boolean failed;
 
-	private NearAtlas(int width, int height, int mipLevels, ResourceManager resourceManager) {
+	private NearAtlas(
+		int bigWidth,
+		int bigHeight,
+		int width,
+		int height,
+		int mipLevels,
+		ResourceManager resourceManager,
+		boolean compact
+	) {
 		this.width = width;
 		this.height = height;
+		this.bigWidth = bigWidth;
+		this.bigHeight = bigHeight;
+		this.compact = compact;
+		this.cell = 1 << (mipLevels - 1);
+		this.cellsX = bigWidth / cell;
+		this.cellsY = bigHeight / cell;
+		// The first cell row is reserved as the target for sprites that are not resident.
+		this.shelfCursorY = cell;
 		this.mipLevels = mipLevels;
 		this.resourceManager = resourceManager;
 		Layer createdAlbedo = null;
@@ -118,10 +150,14 @@ final class NearAtlas implements AutoCloseable {
 			createdAlbedo = Layer.create("Loads of Lods near albedo atlas", width, height, mipLevels);
 			createdNormal = Layer.create("Loads of Lods near normal atlas", width, height, mipLevels);
 			createdSpecular = Layer.create("Loads of Lods near specular atlas", width, height, mipLevels);
+			if (compact) {
+				createRemapTexture();
+			}
 		} catch (RuntimeException | Error exception) {
 			closeQuietly(createdAlbedo);
 			closeQuietly(createdNormal);
 			closeQuietly(createdSpecular);
+			closeRemap();
 			executor.shutdownNow();
 			throw exception;
 		}
@@ -149,13 +185,9 @@ final class NearAtlas implements AutoCloseable {
 			if (width > maximum || height > maximum
 					|| width % PAGE != 0 || height % PAGE != 0
 					|| (width >> (mipLevels - 1)) < PAGE || (height >> (mipLevels - 1)) < PAGE) {
-				LoadsOfLods.LOGGER.info(
-					"Atlas {}x{} with {} mips does not suit sparse textures; Iris terrain stays on the reduced atlas",
-					width, height, mipLevels
-				);
-				return null;
+				return createCompact(width, height, mipLevels, maximum, resourceManager);
 			}
-			NearAtlas atlas = new NearAtlas(width, height, mipLevels, resourceManager);
+			NearAtlas atlas = new NearAtlas(width, height, width, height, mipLevels, resourceManager, false);
 			LoadsOfLods.LOGGER.info(
 				"Created sparse near atlases {}x{} with {} mips (page {}x{}); memory is committed per used sprite",
 				width, height, mipLevels, PAGE, PAGE
@@ -167,8 +199,183 @@ final class NearAtlas implements AutoCloseable {
 		}
 	}
 
+	// For layouts too large for a sparse texture: a smaller sparse atlas holds the sprites near the camera, and a
+	// remap texture sends each terrain vertex's layout UV to the sprite's slot there.
+	private static NearAtlas createCompact(
+		int bigWidth,
+		int bigHeight,
+		int mipLevels,
+		int sparseMaximum,
+		ResourceManager resourceManager
+	) {
+		int cell = 1 << (mipLevels - 1);
+		int size = Math.min(sparseMaximum, MAX_COMPACT_SIZE);
+		size -= size % PAGE;
+		int maxTexture = GL11.glGetInteger(GL11.GL_MAX_TEXTURE_SIZE);
+		if (bigWidth % cell != 0 || bigHeight % cell != 0 || (size >> (mipLevels - 1)) < PAGE
+				|| bigWidth / cell > maxTexture || bigHeight / cell + 1 > maxTexture || bigWidth / cell < 2) {
+			LoadsOfLods.LOGGER.info(
+				"Atlas {}x{} with {} mips does not suit sparse textures; Iris terrain stays on the reduced atlas",
+				bigWidth, bigHeight, mipLevels
+			);
+			return null;
+		}
+		NearAtlas atlas = new NearAtlas(bigWidth, bigHeight, size, size, mipLevels, resourceManager, true);
+		LoadsOfLods.LOGGER.info(
+			"Created compact sparse near atlases {}x{} with {} mips for a {}x{} layout; terrain UVs are remapped in the vertex shader",
+			size, size, mipLevels, bigWidth, bigHeight
+		);
+		return atlas;
+	}
+
 	boolean isUsable() {
 		return !closed && !failed;
+	}
+
+	boolean isCompact() {
+		return compact;
+	}
+
+	GpuTextureView remapView() {
+		return remapView;
+	}
+
+	private void createRemapTexture() {
+		int rows = cellsY + 1;
+		int previousBinding = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+		clearGlErrors();
+		int id = GL11.glGenTextures();
+		try {
+			GL11.glBindTexture(GL11.GL_TEXTURE_2D, id);
+			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL12.GL_TEXTURE_MAX_LEVEL, 0);
+			GL42.glTexStorage2D(GL11.GL_TEXTURE_2D, 1, GL11.GL_RGBA8, cellsX, rows);
+			int previousAlignment = GL11.glGetInteger(GL11.GL_UNPACK_ALIGNMENT);
+			int previousRowLength = GL11.glGetInteger(GL11.GL_UNPACK_ROW_LENGTH);
+			GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 4);
+			GL11.glPixelStorei(GL11.GL_UNPACK_ROW_LENGTH, 0);
+			ByteBuffer zeros = MemoryUtil.memCalloc(cellsX * rows * 4);
+			try {
+				GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, cellsX, rows, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, zeros);
+			} finally {
+				MemoryUtil.memFree(zeros);
+				GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, previousAlignment);
+				GL11.glPixelStorei(GL11.GL_UNPACK_ROW_LENGTH, previousRowLength);
+			}
+			// Header texels: physical atlas size minus one (16 bits per axis), then the cell size.
+			uploadRemapRect(0, cellsY, 2, 1, new int[] {
+				packBytes((width - 1) & 0xFF, (width - 1) >> 8, (height - 1) & 0xFF, (height - 1) >> 8),
+				packBytes(cell, 0, 0, 0)
+			});
+			checkGl("allocating the near remap texture");
+		} catch (RuntimeException | Error exception) {
+			GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousBinding);
+			GL11.glDeleteTextures(id);
+			throw exception;
+		}
+		GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousBinding);
+		GpuTexture texture = new SparseGlTexture("Loads of Lods near remap", cellsX, rows, 1, id);
+		try {
+			remapView = RenderSystem.getDevice().createTextureView(texture);
+		} catch (RuntimeException | Error exception) {
+			texture.close();
+			throw exception;
+		}
+		remapId = id;
+		remapTexture = texture;
+	}
+
+	private static int packBytes(int r, int g, int b, int a) {
+		return (a & 0xFF) << 24 | (b & 0xFF) << 16 | (g & 0xFF) << 8 | (r & 0xFF);
+	}
+
+	// Uploads a rectangle of remap texels; the caller has the remap texture bound or passes through here.
+	private void uploadRemapRect(int x, int y, int w, int h, int[] texels) {
+		int previousBinding = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+		int alignment = GL11.glGetInteger(GL11.GL_UNPACK_ALIGNMENT);
+		int rowLength = GL11.glGetInteger(GL11.GL_UNPACK_ROW_LENGTH);
+		int skipPixels = GL11.glGetInteger(GL11.GL_UNPACK_SKIP_PIXELS);
+		int skipRows = GL11.glGetInteger(GL11.GL_UNPACK_SKIP_ROWS);
+		ByteBuffer buffer = MemoryUtil.memAlloc(texels.length * 4);
+		try {
+			if (remapId != 0) {
+				GL11.glBindTexture(GL11.GL_TEXTURE_2D, remapId);
+			}
+			GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 4);
+			GL11.glPixelStorei(GL11.GL_UNPACK_ROW_LENGTH, 0);
+			GL11.glPixelStorei(GL11.GL_UNPACK_SKIP_PIXELS, 0);
+			GL11.glPixelStorei(GL11.GL_UNPACK_SKIP_ROWS, 0);
+			buffer.asIntBuffer().put(texels);
+			GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, x, y, w, h, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, buffer);
+		} finally {
+			MemoryUtil.memFree(buffer);
+			GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, alignment);
+			GL11.glPixelStorei(GL11.GL_UNPACK_ROW_LENGTH, rowLength);
+			GL11.glPixelStorei(GL11.GL_UNPACK_SKIP_PIXELS, skipPixels);
+			GL11.glPixelStorei(GL11.GL_UNPACK_SKIP_ROWS, skipRows);
+			GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousBinding);
+		}
+	}
+
+	// Points the layout cells of a sprite's slot at its compact slot (mapped) or clears them.
+	private void writeRemap(Geometry g, boolean mapped) {
+		int cx = g.bigX / cell;
+		int cy = g.bigY / cell;
+		int cw = Math.min(g.slotW / cell, cellsX - cx);
+		int ch = Math.min(g.slotH / cell, cellsY - cy);
+		if (cw <= 0 || ch <= 0) {
+			return;
+		}
+		int value = 0;
+		if (mapped) {
+			int dx = (g.x - g.bigX) / cell + 32768;
+			int dy = (g.y - g.bigY) / cell + 4096;
+			value = packBytes(dx & 0xFF, dx >> 8, dy & 0xFF, 0x80 | (dy >> 8));
+		}
+		int[] texels = new int[cw * ch];
+		Arrays.fill(texels, value);
+		uploadRemapRect(cx, cy, cw, ch, texels);
+	}
+
+	// Finds a free slot of the given size, aligned to the cell size, in the compact atlas.
+	private int[] allocateSlot(int w, int h) {
+		java.util.ArrayDeque<int[]> free = freeSlots.get(((long) w << 32) | h);
+		if (free != null && !free.isEmpty()) {
+			return free.poll();
+		}
+		for (int[] shelf : shelves) {
+			if (shelf[1] == h && shelf[2] + w <= width) {
+				int[] slot = {shelf[2], shelf[0]};
+				shelf[2] += w;
+				return slot;
+			}
+		}
+		if (shelfCursorY + h > height || w > width) {
+			return null;
+		}
+		shelves.add(new int[] {shelfCursorY, h, w});
+		int[] slot = {0, shelfCursorY};
+		shelfCursorY += h;
+		return slot;
+	}
+
+	private void freeSlot(Geometry g) {
+		if (compact) {
+			freeSlots.computeIfAbsent(((long) g.slotW << 32) | g.slotH, ignored -> new java.util.ArrayDeque<>())
+				.add(new int[] {g.x, g.y});
+		}
+	}
+
+	private void closeRemap() {
+		if (remapView != null) {
+			remapView.close();
+			remapView = null;
+		}
+		if (remapTexture != null) {
+			remapTexture.close();
+			remapTexture = null;
+		}
 	}
 
 	GpuTexture albedoTexture() {
@@ -340,7 +547,11 @@ final class NearAtlas implements AutoCloseable {
 
 	private void evict(TextureAtlasSprite sprite) {
 		long[] pages = pagesBySprite.remove(sprite);
-		resident.remove(sprite);
+		Geometry evicted = resident.remove(sprite);
+		if (compact && evicted != null) {
+			writeRemap(evicted, false);
+			freeSlot(evicted);
+		}
 		lastFrame.remove(sprite);
 		pendingFrames.remove(sprite);
 		PreparedFrame prepared = preparing.remove(sprite);
@@ -571,6 +782,7 @@ final class NearAtlas implements AutoCloseable {
 			));
 			jobs.add(new Job(sprite, geometry, albedoLevels, pbr));
 		} catch (RuntimeException exception) {
+			freeSlot(geometry);
 			failedSprites++;
 			LoadsOfLods.LOGGER.warn("Could not prepare near sprite {}: {}", sprite.contents().name(), exception.getMessage());
 		}
@@ -582,6 +794,9 @@ final class NearAtlas implements AutoCloseable {
 			write(albedo, job.albedo);
 			write(normal, pbr.get(0));
 			write(specular, pbr.get(1));
+			if (compact) {
+				writeRemap(job.geometry, true);
+			}
 			pagesBySprite.put(job.sprite, pageKeys(job.albedo));
 			for (long key : pagesBySprite.get(job.sprite)) {
 				pageRefs.merge(key, 1, Integer::sum);
@@ -590,6 +805,7 @@ final class NearAtlas implements AutoCloseable {
 			residentSprites++;
 			resident.put(job.sprite, job.geometry);
 		} catch (java.util.concurrent.ExecutionException | InterruptedException | RuntimeException exception) {
+			freeSlot(job.geometry);
 			failedSprites++;
 			LoadsOfLods.LOGGER.error("Could not upload near sprite {}", job.sprite.contents().name(), exception);
 			if (exception instanceof IllegalStateException) {
@@ -601,14 +817,31 @@ final class NearAtlas implements AutoCloseable {
 	private Geometry geometry(TextureAtlasSprite sprite) {
 		int w = sprite.contents().width();
 		int h = sprite.contents().height();
-		int padX = Math.round(sprite.getU0() * width) - sprite.getX();
-		int padY = Math.round(sprite.getV0() * height) - sprite.getY();
+		int padX = Math.round(sprite.getU0() * bigWidth) - sprite.getX();
+		int padY = Math.round(sprite.getV0() * bigHeight) - sprite.getY();
 		if (w <= 0 || h <= 0 || padX < 0 || padY < 0
 				|| sprite.getX() < 0 || sprite.getY() < 0
-				|| sprite.getX() + w + padX * 2 > width || sprite.getY() + h + padY * 2 > height) {
+				|| sprite.getX() + w + padX * 2 > bigWidth || sprite.getY() + h + padY * 2 > bigHeight) {
 			return null;
 		}
-		return new Geometry(sprite.getX(), sprite.getY(), w, h, padX, padY);
+		if (!compact) {
+			return new Geometry(sprite.getX(), sprite.getY(), w, h, padX, padY, sprite.getX(), sprite.getY(), 0, 0);
+		}
+		if (sprite.getX() % cell != 0 || sprite.getY() % cell != 0) {
+			if (!misalignedLogged) {
+				misalignedLogged = true;
+				LoadsOfLods.LOGGER.warn("Sprite {} is not aligned to {} texels; the compact near atlas cannot hold it",
+					sprite.contents().name(), cell);
+			}
+			return null;
+		}
+		int slotW = Math.ceilDiv(w + 2 * padX, cell) * cell;
+		int slotH = Math.ceilDiv(h + 2 * padY, cell) * cell;
+		int[] slot = allocateSlot(slotW, slotH);
+		if (slot == null) {
+			return null;
+		}
+		return new Geometry(slot[0], slot[1], w, h, padX, padY, sprite.getX(), sprite.getY(), slotW, slotH);
 	}
 
 	private List<LevelData> albedoLevels(TextureAtlasSprite sprite, Geometry geometry, int frameIndex) {
@@ -806,6 +1039,11 @@ final class NearAtlas implements AutoCloseable {
 		closeQuietly(albedo);
 		closeQuietly(normal);
 		closeQuietly(specular);
+		try {
+			closeRemap();
+		} catch (RuntimeException exception) {
+			LoadsOfLods.LOGGER.warn("Could not release the near remap texture", exception);
+		}
 	}
 
 	private static void closeQuietly(Layer layer) {
@@ -872,7 +1110,9 @@ final class NearAtlas implements AutoCloseable {
 	private record FrameKey(int frame, int nextFrame, float weight) {
 	}
 
-	private record Geometry(int x, int y, int width, int height, int padX, int padY) {
+	private record Geometry(
+		int x, int y, int width, int height, int padX, int padY, int bigX, int bigY, int slotW, int slotH
+	) {
 	}
 
 	private record LevelData(int level, int x, int y, int width, int height, int[] argb) {
