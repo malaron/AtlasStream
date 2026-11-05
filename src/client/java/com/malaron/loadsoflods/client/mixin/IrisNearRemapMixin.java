@@ -21,7 +21,7 @@ public abstract class IrisNearRemapMixin {
 		"return vec2(a_TexCoord & TEXTURE_MAX_VALUE) / float(TEXTURE_MAX_COORD);";
 	private static final String REMAP_FUNCTION = """
 uniform sampler2D u_LodsNearRemap;
-vec2 loadsOfLodsNearRemapKeyed(vec2 uv, vec2 keyOffset) {
+vec2 loadsOfLodsNearRemap(vec2 uv) {
     ivec2 remapSize = textureSize(u_LodsNearRemap, 0);
     if (remapSize.x <= 1) {
         return uv;
@@ -35,8 +35,7 @@ vec2 loadsOfLodsNearRemapKeyed(vec2 uv, vec2 keyOffset) {
     ) + 1.0;
     float cell = floor(header1.r * 255.0 + 0.5);
     vec2 texel = uv * (vec2(remapSize.x, rows) * cell);
-    // Edge vertices sit exactly on a cell boundary, so look the slot up slightly inside the sprite.
-    ivec2 cellCoord = clamp(ivec2(floor((texel + keyOffset * cell) / cell)), ivec2(0), ivec2(remapSize.x - 1, rows - 1));
+    ivec2 cellCoord = clamp(ivec2(floor(texel / cell)),  ivec2(0), ivec2(remapSize.x - 1, rows - 1));
     vec4 entry = texelFetch(u_LodsNearRemap, cellCoord, 0);
     if (entry.a < 0.5) {
         return vec2(cell * 0.5) / compactSize;
@@ -44,12 +43,6 @@ vec2 loadsOfLodsNearRemapKeyed(vec2 uv, vec2 keyOffset) {
     float dx = floor(entry.r * 255.0 + 0.5) + floor(entry.g * 255.0 + 0.5) * 256.0 - 32768.0;
     float dy = floor(entry.b * 255.0 + 0.5) + mod(floor(entry.a * 255.0 + 0.5), 128.0) * 256.0 - 4096.0;
     return (texel + vec2(dx, dy) * cell) / compactSize;
-}
-vec2 loadsOfLodsNearRemap(vec2 uv) {
-    return loadsOfLodsNearRemapKeyed(uv, vec2(0.0));
-}
-vec2 loadsOfLodsNearRemapEdge(vec2 uv) {
-    return loadsOfLodsNearRemapKeyed(uv, mix(vec2(0.25), vec2(-0.25), bvec2(a_TexCoord >> TEXTURE_BITS)));
 }
 """;
 	private static final java.util.regex.Pattern MID_TEXCOORD = java.util.regex.Pattern.compile(
@@ -79,7 +72,7 @@ vec2 loadsOfLodsNearRemapEdge(vec2 uv) {
 			String replaced = source.substring(0, function) + REMAP_FUNCTION + source.substring(function);
 			replaced = replaced.replace(
 				TEXCOORD_RETURN,
-				"return loadsOfLodsNearRemapEdge(vec2(a_TexCoord & TEXTURE_MAX_VALUE) / float(TEXTURE_MAX_COORD));"
+				"return loadsOfLodsNearRemap(vec2(a_TexCoord & TEXTURE_MAX_VALUE) / float(TEXTURE_MAX_COORD));"
 			);
 			// The sprite's mid coordinate is a separate attribute in layout space; packs compare it with the diffuse
 			// UV (for example to clamp to the sprite), so it has to move to the compact atlas as well.
