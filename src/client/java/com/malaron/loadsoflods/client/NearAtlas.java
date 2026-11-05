@@ -557,13 +557,20 @@ final class NearAtlas implements AutoCloseable {
 			evictForWaitingSprites(needed, now);
 		}
 		evictUnneeded(needed, config, radius <= 0.0, now);
-		// Each freed slot lets one waiting sprite try again, nearest first; the rest stay parked.
+		// Each free slot lets one waiting sprite of the same size try again, nearest first; the rest stay parked.
 		if (freedSlots > 0 && !waitingForSlot.isEmpty()) {
 			List<TextureAtlasSprite> waiting = new ArrayList<>(waitingForSlot);
 			waiting.sort(java.util.Comparator.comparingDouble(this::distanceOf));
-			for (int i = 0; i < waiting.size() && i < freedSlots; i++) {
-				incoming.add(waiting.get(i));
-				waitingForSlot.remove(waiting.get(i));
+			java.util.Map<Long, Integer> free = new java.util.HashMap<>();
+			freeSlots.forEach((key, slots) -> free.put(key, slots.size()));
+			for (TextureAtlasSprite sprite : waiting) {
+				long key = slotKey(sprite);
+				int count = free.getOrDefault(key, 0);
+				if (count > 0) {
+					free.put(key, count - 1);
+					incoming.add(sprite);
+					waitingForSlot.remove(sprite);
+				}
 			}
 		}
 		freedSlots = 0;
@@ -571,6 +578,20 @@ final class NearAtlas implements AutoCloseable {
 
 	private double distanceOf(TextureAtlasSprite sprite) {
 		return spriteDistance.getOrDefault(sprite, Double.MAX_VALUE);
+	}
+
+	// The compact slot size a sprite needs (as allocateSlot keys it), or -1 when it cannot be placed.
+	private long slotKey(TextureAtlasSprite sprite) {
+		int w = sprite.contents().width();
+		int h = sprite.contents().height();
+		int padX = Math.round(sprite.getU0() * bigWidth) - sprite.getX();
+		int padY = Math.round(sprite.getV0() * bigHeight) - sprite.getY();
+		if (w <= 0 || h <= 0 || padX < 0 || padY < 0) {
+			return -1L;
+		}
+		long slotW = (long) Math.ceilDiv(w + 2 * padX, cell) * cell;
+		long slotH = (long) Math.ceilDiv(h + 2 * padY, cell) * cell;
+		return (slotW << 32) | slotH;
 	}
 
 	// The compact atlas has no free slot for sprites that are needed. Make room by dropping the resident sprites
@@ -596,17 +617,37 @@ final class NearAtlas implements AutoCloseable {
 		}
 		long deadline = System.nanoTime() + PRESSURE_EVICT_BUDGET_NANOS;
 		try {
-			int limit = Math.min(MAX_PRESSURE_EVICTIONS_PER_REFRESH, Math.min(waiting.size(), victims.size()));
-			for (int i = 0; i < limit; i++) {
-				TextureAtlasSprite victim = victims.get(i);
+			// A freed slot only helps a sprite of exactly the same slot size, so match victims by size.
+			java.util.Map<Long, java.util.ArrayDeque<TextureAtlasSprite>> bySize = new java.util.HashMap<>();
+			for (TextureAtlasSprite victim : victims) {
+				Geometry g = resident.get(victim);
+				bySize.computeIfAbsent(((long) g.slotW << 32) | g.slotH, ignored -> new java.util.ArrayDeque<>()).add(victim);
+			}
+			java.util.Map<Long, Integer> free = new java.util.HashMap<>();
+			freeSlots.forEach((key, slots) -> free.put(key, slots.size()));
+			int evictions = 0;
+			for (TextureAtlasSprite sprite : waiting) {
+				if (evictions >= MAX_PRESSURE_EVICTIONS_PER_REFRESH || System.nanoTime() >= deadline) {
+					break;
+				}
+				long key = slotKey(sprite);
+				int count = free.getOrDefault(key, 0);
+				if (count > 0) {
+					free.put(key, count - 1);
+					continue;
+				}
+				java.util.ArrayDeque<TextureAtlasSprite> candidates = bySize.get(key);
+				if (candidates == null || candidates.isEmpty()) {
+					continue;
+				}
+				TextureAtlasSprite victim = candidates.peek();
 				double victimDistance = needed.contains(victim) ? distanceOf(victim) : Double.MAX_VALUE;
-				if (victimDistance <= distanceOf(waiting.get(i)) + PRESSURE_SWAP_MARGIN_BLOCKS) {
-					break;
+				if (victimDistance <= distanceOf(sprite) + PRESSURE_SWAP_MARGIN_BLOCKS) {
+					continue;
 				}
+				candidates.poll();
 				evict(victim);
-				if (System.nanoTime() >= deadline) {
-					break;
-				}
+				evictions++;
 			}
 			checkGl("releasing sparse pages");
 		} catch (IllegalStateException exception) {
