@@ -1341,10 +1341,23 @@ public final class AtlasPreviewState {
 				throw exception;
 			}
 		}
+		CompletableFuture<IrisPbrAtlasReducer.Images> pbrFuture = null;
 		try {
 			NativeImage atlas = new NativeImage(lowAtlasWidth, lowAtlasHeight, true);
 			long buildStartNanos = System.nanoTime();
 			mipLevels.add(atlas);
+			if (reducePbr) {
+				// PBR reduction reads only the resource packs, so it runs alongside the albedo pass.
+				pbrFuture = CompletableFuture.supplyAsync(() -> {
+					try {
+						return IrisPbrAtlasReducer.build(
+							resourceManager, regions, lowAtlasWidth, lowAtlasHeight, lowMipLevelCount, downscaleFactor
+						);
+					} catch (IOException exception) {
+						throw new java.io.UncheckedIOException(exception);
+					}
+				});
+			}
 			List<SpriteRegion> lowRegions = regions.stream()
 				.map(region -> scaleRegion(region, downscaleFactor))
 				.toList();
@@ -1432,25 +1445,19 @@ public final class AtlasPreviewState {
 				}
 			}
 			IrisPbrAtlasReducer.Images pbrImages = null;
-			long pbrStartNanos = System.nanoTime();
-			if (reducePbr) {
+			long pbrWaitStartNanos = System.nanoTime();
+			if (pbrFuture != null) {
 				try {
-					pbrImages = IrisPbrAtlasReducer.build(
-						resourceManager,
-						regions,
-						lowAtlasWidth,
-						lowAtlasHeight,
-						lowMipLevelCount,
-						downscaleFactor
-					);
-				} catch (IOException | RuntimeException exception) {
+					pbrImages = pbrFuture.join();
+				} catch (RuntimeException exception) {
 					LoadsOfLods.LOGGER.error("Could not reduce Iris PBR maps; they stay full resolution", exception);
 				}
+				pbrFuture = null;
 			}
 			LoadsOfLods.LOGGER.info(
-				"Reduced atlas phases: albedo {} ms, PBR {} ms",
-				(pbrStartNanos - buildStartNanos) / 1_000_000L,
-				(System.nanoTime() - pbrStartNanos) / 1_000_000L
+				"Reduced atlas phases: albedo {} ms, PBR finished {} ms after the albedo pass",
+				(System.nanoTime() - buildStartNanos) / 1_000_000L,
+				(System.nanoTime() - pbrWaitStartNanos) / 1_000_000L
 			);
 			if (cacheKey != null && (!reducePbr || pbrImages != null)) {
 				ReducedAtlasCache.store(cacheKey, mipLevels, pbrImages);
@@ -1474,6 +1481,14 @@ public final class AtlasPreviewState {
 				pbrImages
 			);
 		} catch (RuntimeException | Error exception) {
+			if (pbrFuture != null) {
+				pbrFuture.whenComplete((images, failure) -> {
+					if (images != null) {
+						images.normal().forEach(NativeImage::close);
+						images.specular().forEach(NativeImage::close);
+					}
+				});
+			}
 			for (NativeImage mipLevel : mipLevels) {
 				mipLevel.close();
 			}
