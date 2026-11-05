@@ -56,6 +56,7 @@ vec2 loadsOfLodsNearRemapEdge(vec2 uv) {
 		"vec2\\(mc_midTexCoord\\.xy\\) \\* (.*?)(?=\\)\\.xy;|, 0\\.0\\);|, 0\\.0, 1\\.0\\);)"
 	);
 	private static boolean logged;
+	private static boolean midLogged;
 
 	@Inject(method = "patchSodium", at = @At("RETURN"), cancellable = true, remap = false)
 	private static void loadsOfLods$remap(CallbackInfoReturnable<Map<Object, String>> callback) {
@@ -82,11 +83,21 @@ vec2 loadsOfLodsNearRemapEdge(vec2 uv) {
 			);
 			// The sprite's mid coordinate is a separate attribute in layout space; packs compare it with the diffuse
 			// UV (for example to clamp to the sprite), so it has to move to the compact atlas as well.
+			int[] midCount = {0};
 			replaced = MID_TEXCOORD.matcher(replaced).replaceAll(
-				match -> java.util.regex.Matcher.quoteReplacement(
-					"loadsOfLodsNearRemap(vec2(mc_midTexCoord.xy) * " + match.group(1) + ")"
-				)
+				match -> {
+					midCount[0]++;
+					return java.util.regex.Matcher.quoteReplacement(
+						"loadsOfLodsNearRemap(vec2(mc_midTexCoord.xy) * " + match.group(1) + ")"
+					);
+				}
 			);
+			if (midCount[0] == 0 && !midLogged) {
+				midLogged = true;
+				int at = replaced.indexOf("mc_midTexCoord");
+				LoadsOfLods.LOGGER.warn("Near UV remap did not patch mc_midTexCoord; shader text: {}",
+					at < 0 ? "<absent>" : replaced.substring(Math.max(0, at - 120), Math.min(replaced.length(), at + 200)).replace('\n', ' '));
+			}
 			entry.setValue(replaced);
 			changed = true;
 		}
