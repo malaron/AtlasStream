@@ -1171,6 +1171,12 @@ public final class AtlasPreviewState {
 		}
 		if (reloadRebuildPending) {
 			reloadRebuildTicks = 20;
+			// The early path already builds without waiting for a world or Iris's pipeline. Ticks can be delayed by
+			// other mods' reload work on this thread, so start it as soon as the atlas exists.
+			if (launchRebuild && SodiumLodBridge.isIrisConfiguredForShaders()) {
+				reloadRebuildTicks = 0;
+				serviceReloadRebuild();
+			}
 		}
 	}
 
@@ -1272,6 +1278,69 @@ public final class AtlasPreviewState {
 		List<NativeImage> mipLevels = new ArrayList<>(lowMipLevelCount);
 		List<AnimatedSpriteData> animatedSpriteData = new ArrayList<>();
 		long[] totalImageBytes = {imageBytes};
+		boolean debugTint = LoadsOfLodsClient.getConfig().debugTintLowResolution();
+		String cacheKey = ReducedAtlasCache.fingerprint(
+			resourceManager, regions, atlasWidth, atlasHeight, mipLevelCount, downscaleFactor, reducePbr, debugTint
+		);
+		ReducedAtlasCache.Entry cached = cacheKey == null
+			? null
+			: ReducedAtlasCache.load(cacheKey, lowAtlasWidth, lowAtlasHeight, lowMipLevelCount, reducePbr);
+		if (cached != null) {
+			try {
+				mipLevels.addAll(cached.albedo());
+				AtomicInteger animatedSprites = new AtomicInteger();
+				AtomicInteger animatedSpritesCached = new AtomicInteger();
+				// Only the animation frame data is rebuilt; the atlas pixels already include frame 0.
+				regions.parallelStream().filter(SpriteRegion::animated).forEach(region -> {
+					animatedSprites.incrementAndGet();
+					try {
+						Identifier textureId = Identifier.fromNamespaceAndPath(
+							region.identifier().getNamespace(),
+							"textures/" + region.identifier().getPath() + ".png"
+						);
+						Resource resource = resourceManager.getResource(textureId)
+							.orElseThrow(() -> new IOException("Missing texture resource " + textureId));
+						BufferedImage source;
+						try (InputStream input = resource.open()) {
+							source = ImageIO.read(input);
+						}
+						if (source == null) {
+							throw new IOException("Texture resource is not a readable image");
+						}
+						try {
+							synchronized (animatedSpriteData) {
+								AnimatedSpriteData animation = createAnimatedSpriteData(
+									resource, source, region, downscaleFactor, lowMipLevelCount, totalImageBytes
+								);
+								if (animation != null) {
+									animatedSpriteData.add(animation);
+									animatedSpritesCached.incrementAndGet();
+								}
+							}
+						} finally {
+							source.flush();
+						}
+					} catch (IOException | RuntimeException exception) {
+						LoadsOfLods.LOGGER.warn(
+							"Leaving animated sprite {} static: {}", region.identifier(), exception.getMessage()
+						);
+					}
+				});
+				IrisPbrAtlasReducer.Images cachedPbr = reducePbr
+					? new IrisPbrAtlasReducer.Images(cached.normal(), cached.specular())
+					: null;
+				LoadsOfLods.LOGGER.info(
+					"Loaded the reduced atlas from the disk cache: {}x{}, scale 1:{}, {}/{} animated sprites synchronized, {} mip levels; PBR maps {}",
+					lowAtlasWidth, lowAtlasHeight, downscaleFactor, animatedSpritesCached.get(), animatedSprites.get(),
+					lowMipLevelCount, cachedPbr != null ? "reduced" : "unchanged"
+				);
+				return new LowAtlasImage(mipLevels, downscaleFactor, animatedSpriteData, cachedPbr);
+			} catch (RuntimeException | Error exception) {
+				cached.close();
+				closeAnimatedSprites(animatedSpriteData);
+				throw exception;
+			}
+		}
 		try {
 			NativeImage atlas = new NativeImage(lowAtlasWidth, lowAtlasHeight, true);
 			mipLevels.add(atlas);
@@ -1375,6 +1444,9 @@ public final class AtlasPreviewState {
 				} catch (IOException | RuntimeException exception) {
 					LoadsOfLods.LOGGER.error("Could not reduce Iris PBR maps; they stay full resolution", exception);
 				}
+			}
+			if (cacheKey != null && (!reducePbr || pbrImages != null)) {
+				ReducedAtlasCache.store(cacheKey, mipLevels, pbrImages);
 			}
 			LoadsOfLods.LOGGER.info(
 				"Built low-resolution albedo atlas preview: {}x{}, scale 1:{}, {} sprites, {} skipped, {}/{} animated sprites synchronized, {} mip levels; PBR maps {}",

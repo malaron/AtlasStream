@@ -74,11 +74,14 @@ final class NearAtlas implements AutoCloseable {
 	private final Layer specular;
 	private final AbstractTexture normalWrapper = new Wrapper();
 	private final AbstractTexture specularWrapper = new Wrapper();
-	private final ExecutorService executor = Executors.newFixedThreadPool(3, runnable -> {
-		Thread thread = new Thread(runnable, "Loads of Lods near-atlas loader");
-		thread.setDaemon(true);
-		return thread;
-	});
+	private final ExecutorService executor = Executors.newFixedThreadPool(
+		Math.max(3, Math.min(8, Runtime.getRuntime().availableProcessors() / 2)),
+		runnable -> {
+			Thread thread = new Thread(runnable, "Loads of Lods near-atlas loader");
+			thread.setDaemon(true);
+			return thread;
+		}
+	);
 	private final Set<TextureAtlasSprite> requested = ConcurrentHashMap.newKeySet();
 	private final java.util.Map<Long, Set<TextureAtlasSprite>> sectionSprites = new ConcurrentHashMap<>();
 	private final java.util.Map<TextureAtlasSprite, Long> lastTouched = new ConcurrentHashMap<>();
@@ -621,7 +624,11 @@ final class NearAtlas implements AutoCloseable {
 			activeRefreshTicks = 3;
 			refreshSprites();
 		}
-		for (int started = 0; started < MAX_NEW_JOBS_PER_TICK; started++) {
+		// Until the first sprites around the camera are resident the near terrain is drawn from the reduced atlas,
+		// so catch up faster than the steady-state limits allow.
+		int newJobLimit = warm ? MAX_NEW_JOBS_PER_TICK : MAX_NEW_JOBS_PER_TICK * 4;
+		int uploadLimit = warm ? MAX_UPLOADS_PER_TICK : MAX_UPLOADS_PER_TICK * 4;
+		for (int started = 0; started < newJobLimit; started++) {
 			TextureAtlasSprite sprite = incoming.poll();
 			if (sprite == null) {
 				break;
@@ -630,7 +637,7 @@ final class NearAtlas implements AutoCloseable {
 		}
 		int uploads = 0;
 		Iterator<Job> iterator = jobs.iterator();
-		while (iterator.hasNext() && uploads < MAX_UPLOADS_PER_TICK) {
+		while (iterator.hasNext() && uploads < uploadLimit) {
 			Job job = iterator.next();
 			if (!job.pbr.isDone()) {
 				continue;
