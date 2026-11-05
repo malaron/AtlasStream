@@ -609,7 +609,7 @@ final class NearAtlas implements AutoCloseable {
 			lastPressureLog = now;
 			TextureAtlasSprite far = victims.get(0);
 			TextureAtlasSprite near = waiting.get(0);
-			LoadsOfLods.LOGGER.info(
+			LoadsOfLods.LOGGER.debug(
 				"Slot pressure: nearest waiting {} at {} blocks ({}x{}), farthest resident {} at {} blocks, {} waiting, {} resident",
 				near.contents().name(), (int) distanceOf(near), near.contents().width(), near.contents().height(),
 				far.contents().name(), needed.contains(far) ? (int) distanceOf(far) : -1, waiting.size(), victims.size()

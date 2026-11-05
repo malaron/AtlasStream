@@ -76,7 +76,7 @@ rejoin the queue behind nearer ones. Sections whose sprites are not all resident
 are drawn from the reduced atlas. A large queue of far sprites is normal when
 the compact atlas is smaller than the view needs. To test this, launch with
 `-Dloadsoflods.compactSize=8192` (texels, default 16384) and watch the F3
-"Near sparse atlas" line and the `Slot pressure:` log lines.
+"Near sparse atlas" line and the `Slot pressure:` debug log lines.
 
 ### Reduced-atlas disk cache
 
