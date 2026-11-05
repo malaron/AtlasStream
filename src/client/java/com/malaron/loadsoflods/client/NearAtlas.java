@@ -41,7 +41,8 @@ import org.lwjgl.system.MemoryUtil;
 // layout, so terrain UVs are unchanged, but physical memory is committed only for sprites terrain actually uses.
 final class NearAtlas implements AutoCloseable {
 	private static final int PAGE = 128;
-	private static final int MAX_COMPACT_SIZE = 16384;
+	// -Dloadsoflods.compactSize=<texels> shrinks the compact atlas to force overflow when testing.
+	private static final int MAX_COMPACT_SIZE = Integer.getInteger("loadsoflods.compactSize", 16384);
 	private static final int DEFAULT_NORMAL = 0xFF8080FF;
 	private static final int DEFAULT_SPECULAR = 0;
 	private static final int MAX_NEW_JOBS_PER_TICK = 8;
@@ -67,6 +68,7 @@ final class NearAtlas implements AutoCloseable {
 	private final java.util.Map<Long, java.util.ArrayDeque<int[]>> freeSlots = new java.util.HashMap<>();
 	private int shelfCursorY;
 	private boolean misalignedLogged;
+	private boolean overflowLogged;
 	private final int mipLevels;
 	private final ResourceManager resourceManager;
 	private final Layer albedo;
@@ -850,6 +852,13 @@ final class NearAtlas implements AutoCloseable {
 		int slotH = Math.ceilDiv(h + 2 * padY, cell) * cell;
 		int[] slot = allocateSlot(slotW, slotH);
 		if (slot == null) {
+			if (!overflowLogged) {
+				overflowLogged = true;
+				LoadsOfLods.LOGGER.warn(
+					"The compact near atlas ({}x{}) is full; sprites that do not fit stay unresolved until space is freed",
+					width, height
+				);
+			}
 			return null;
 		}
 		return new Geometry(slot[0], slot[1], w, h, padX, padY, sprite.getX(), sprite.getY(), slotW, slotH);
