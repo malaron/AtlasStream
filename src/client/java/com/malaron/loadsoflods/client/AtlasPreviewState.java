@@ -1343,6 +1343,7 @@ public final class AtlasPreviewState {
 		}
 		try {
 			NativeImage atlas = new NativeImage(lowAtlasWidth, lowAtlasHeight, true);
+			long buildStartNanos = System.nanoTime();
 			mipLevels.add(atlas);
 			List<SpriteRegion> lowRegions = regions.stream()
 				.map(region -> scaleRegion(region, downscaleFactor))
@@ -1431,6 +1432,7 @@ public final class AtlasPreviewState {
 				}
 			}
 			IrisPbrAtlasReducer.Images pbrImages = null;
+			long pbrStartNanos = System.nanoTime();
 			if (reducePbr) {
 				try {
 					pbrImages = IrisPbrAtlasReducer.build(
@@ -1445,6 +1447,11 @@ public final class AtlasPreviewState {
 					LoadsOfLods.LOGGER.error("Could not reduce Iris PBR maps; they stay full resolution", exception);
 				}
 			}
+			LoadsOfLods.LOGGER.info(
+				"Reduced atlas phases: albedo {} ms, PBR {} ms",
+				(pbrStartNanos - buildStartNanos) / 1_000_000L,
+				(System.nanoTime() - pbrStartNanos) / 1_000_000L
+			);
 			if (cacheKey != null && (!reducePbr || pbrImages != null)) {
 				ReducedAtlasCache.store(cacheKey, mipLevels, pbrImages);
 			}

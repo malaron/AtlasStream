@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
 import com.malaron.loadsoflods.LoadsOfLods;
 import com.malaron.loadsoflods.cache.PbrTextureDownsampler;
@@ -48,18 +49,38 @@ final class IrisPbrAtlasReducer {
 		int mipLevelCount,
 		int factor
 	) throws IOException {
-		List<NativeImage> normal = buildKind(
-			resourceManager, regions, lowWidth, lowHeight, mipLevelCount, factor,
-			"_n", DEFAULT_NORMAL, IrisPbrAtlasReducer::averageNormal
-		);
+		// Normal and specular are independent, so overlap them to hide file and decode stalls.
+		CompletableFuture<List<NativeImage>> specularFuture = CompletableFuture.supplyAsync(() -> {
+			try {
+				return buildKind(
+					resourceManager, regions, lowWidth, lowHeight, mipLevelCount, factor,
+					"_s", DEFAULT_SPECULAR, IrisPbrAtlasReducer::averageSpecular
+				);
+			} catch (IOException exception) {
+				throw new java.io.UncheckedIOException(exception);
+			}
+		});
+		List<NativeImage> normal;
 		try {
-			List<NativeImage> specular = buildKind(
+			normal = buildKind(
 				resourceManager, regions, lowWidth, lowHeight, mipLevelCount, factor,
-				"_s", DEFAULT_SPECULAR, IrisPbrAtlasReducer::averageSpecular
+				"_n", DEFAULT_NORMAL, IrisPbrAtlasReducer::averageNormal
 			);
-			return new Images(normal, specular);
 		} catch (IOException | RuntimeException | Error exception) {
+			specularFuture.whenComplete((images, failure) -> {
+				if (images != null) {
+					images.forEach(NativeImage::close);
+				}
+			});
+			throw exception;
+		}
+		try {
+			return new Images(normal, specularFuture.join());
+		} catch (java.util.concurrent.CompletionException exception) {
 			normal.forEach(NativeImage::close);
+			if (exception.getCause() instanceof java.io.UncheckedIOException io) {
+				throw io.getCause();
+			}
 			throw exception;
 		}
 	}
