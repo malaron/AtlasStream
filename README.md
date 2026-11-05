@@ -64,7 +64,19 @@ translate UVs through it. With Iris this works by patching the shader text Iris
 generates for Sodium (`_get_texcoord` and `mc_midTexCoord`), so it depends on
 the Iris version: an Iris update that changes that text may need a matching
 change here. The log warns when `mc_midTexCoord` is present but could not be
-patched. If the compact atlas fills up, extra sprites are skipped.
+patched. The same remap is applied to the vanilla (non-terrain) shaders, guarded
+by the bound texture size, so held blocks, falling blocks and particles are
+full-resolution too. With Iris, translucent terrain (glass) is split by distance
+so near glass also uses the near atlas.
+
+If the compact atlas fills up, sprites without a slot wait in a queue. Under
+pressure the farthest resident sprites are evicted, matched by slot size, to
+make room for the nearest waiting ones, and evicted-but-still-needed sprites
+rejoin the queue behind nearer ones. Sections whose sprites are not all resident
+are drawn from the reduced atlas. A large queue of far sprites is normal when
+the compact atlas is smaller than the view needs. To test this, launch with
+`-Dloadsoflods.compactSize=8192` (texels, default 16384) and watch the F3
+"Near sparse atlas" line and the `Slot pressure:` log lines.
 
 ### Reduced-atlas disk cache
 
