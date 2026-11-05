@@ -87,6 +87,20 @@ public record LodConfig(
 		return config;
 	}
 
+	// Hand-edited key: "always" keeps the block atlas virtual (never allocated on the GPU) even when it would fit.
+	public static boolean readAlwaysVirtualAtlas(Path file) {
+		if (!Files.exists(file)) {
+			return false;
+		}
+		Properties properties = new Properties();
+		try (InputStream input = Files.newInputStream(file)) {
+			properties.load(input);
+		} catch (IOException exception) {
+			return false;
+		}
+		return "always".equalsIgnoreCase(properties.getProperty("virtualAtlas", "auto").trim());
+	}
+
 	private static double readNumber(Properties properties, String key, double defaultValue) {
 		String value = properties.getProperty(key);
 		if (value == null) {
@@ -113,6 +127,14 @@ public record LodConfig(
 
 	public static void save(Path file, LodConfig config) {
 		Properties properties = new Properties();
+		// Keep keys that are only edited by hand (such as virtualAtlas).
+		if (Files.exists(file)) {
+			try (InputStream input = Files.newInputStream(file)) {
+				properties.load(input);
+			} catch (IOException exception) {
+				throw new IllegalStateException("Could not read LOD configuration at " + file, exception);
+			}
+		}
 		properties.setProperty("highResolutionDistance", Double.toString(config.highResolutionDistance()));
 		properties.setProperty("hysteresis", Double.toString(config.hysteresis()));
 		properties.setProperty("highResolutionCacheMiB", Long.toString(config.highResolutionCacheMiB()));

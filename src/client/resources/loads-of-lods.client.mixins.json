@@ -15,6 +15,7 @@
 		"SpriteContentsAccessor",
 		"SpriteContentsDownscaleMixin",
 		"SpriteLoaderOverflowMixin",
+		"TextureAtlasVirtualMixin",
 		"SodiumChunkBuildPriorityMixin",
 		"SodiumTerrainRenderPassMixin",
 		"SodiumVirtualTextureBindingsMixin",

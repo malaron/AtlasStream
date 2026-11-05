@@ -167,6 +167,18 @@ budget bounds the 2D cache allocation, further limited to one quarter of the
 estimated full-atlas allocation to ensure the cache is smaller than the
 texture it replaces, and by the GPU's maximum RGBA8 texture dimensions and
 allocation size.
+
+Virtual block atlas: the full block atlas is only used for its layout, because the albedo is
+rebuilt from the resource pack. A pack whose stitched atlas exceeds the GPU's maximum texture size
+(or `virtualAtlas=always` in the config file, which also skips the full-size upload for packs that
+fit) is therefore stitched against a larger virtual limit of up to 65536x65536, and the block
+atlas keeps those dimensions and sprite coordinates but only holds a 1x1 placeholder texture.
+The rebuild always runs after such a reload, so there is no separate opt-in. With Iris the sparse
+near atlas is skipped when the layout exceeds the sparse texture limit and terrain uses the
+reduced atlas. Only when a layout does not fit even 65536x65536, or for other atlases, are large
+sprites reduced by the smallest power of two that lets the atlas stitch. Atlas dimensions are
+stored minus one in the metadata texture so 65536 fits in two bytes.
+
 Sodium's resolved chunk-mesh sprite usage is collected into bounded UV requests and expanded
 incrementally into tile requests; tile construction and upload are throttled
 during the client tick, outside the terrain render pass where GPU texture

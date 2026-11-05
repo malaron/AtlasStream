@@ -24,4 +24,13 @@ public interface TextureAtlasAccessor {
 	@Accessor("mipViews")
 	@Mutable
 	void loadsOfLods$setMipViews(GpuTextureView[] mipViews);
+
+	@Accessor("width")
+	int loadsOfLods$getWidth();
+
+	@Accessor("height")
+	int loadsOfLods$getHeight();
+
+	@Accessor("mipLevelCount")
+	int loadsOfLods$getMipLevelCount();
 }

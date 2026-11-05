@@ -3,6 +3,7 @@ package com.malaron.loadsoflods.client.mixin;
 import com.malaron.loadsoflods.LoadsOfLods;
 import com.malaron.loadsoflods.client.DownscalableSprite;
 import com.malaron.loadsoflods.client.SpriteFootprint;
+import com.malaron.loadsoflods.client.VirtualAtlasPolicy;
 import java.util.List;
 import java.util.concurrent.Executor;
 import net.minecraft.client.Minecraft;
@@ -16,6 +17,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.util.Mth;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Mutable;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -23,16 +25,17 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * Packs that do not fit in the GPU's maximum texture size crash vanilla stitching before this mod can
- * reduce anything. When that would happen, shrink the oversized sprites by the smallest power of two that fits.
+ * Vanilla refuses to stitch an atlas larger than the GPU's texture limit, which stops big packs before this mod
+ * can shrink anything. The block atlas is stitched against a larger virtual limit instead (it is never allocated
+ * as a GPU texture, see TextureAtlasVirtualMixin). Only when even that is too small, or for other atlases, are
+ * the large sprites reduced by the smallest power of two that fits.
  */
 @Mixin(SpriteLoader.class)
 public abstract class SpriteLoaderOverflowMixin {
-	@Unique
-	private static final int MAX_DIVISOR = 32;
+	@Unique private static final int MAX_DIVISOR = 32;
 
 	@Shadow @Final private Identifier location;
-	@Shadow @Final private int maxSupportedTextureSize;
+	@Shadow @Final @Mutable private int maxSupportedTextureSize;
 
 	@Inject(method = "stitch", at = @At("HEAD"))
 	private void loadsOfLods$fitOversizedAtlas(
@@ -41,12 +44,26 @@ public abstract class SpriteLoaderOverflowMixin {
 		Executor executor,
 		CallbackInfoReturnable<SpriteLoader.Preparations> callback
 	) {
-		if (sprites.isEmpty()) {
+		if (sprites.isEmpty() || loadsOfLods$fits(sprites, maxMipmapLevels, 1, maxSupportedTextureSize)) {
 			return;
 		}
+		int limit = VirtualAtlasPolicy.available(location)
+			? Math.max(maxSupportedTextureSize, VirtualAtlasPolicy.MAX_VIRTUAL_SIZE)
+			: maxSupportedTextureSize;
 		int divisor = 1;
-		while (divisor < MAX_DIVISOR && !fits(sprites, maxMipmapLevels, divisor)) {
+		while (divisor < MAX_DIVISOR && !loadsOfLods$fits(sprites, maxMipmapLevels, divisor, limit)) {
 			divisor <<= 1;
+		}
+		if (limit != maxSupportedTextureSize) {
+			LoadsOfLods.LOGGER.info(
+				"Atlas {} does not fit in {}x{}; stitching it as a virtual {}x{} layout",
+				location,
+				maxSupportedTextureSize,
+				maxSupportedTextureSize,
+				limit,
+				limit
+			);
+			maxSupportedTextureSize = limit;
 		}
 		if (divisor == 1) {
 			return;
@@ -56,16 +73,16 @@ public abstract class SpriteLoaderOverflowMixin {
 			scalable.loadsOfLods$downscale(scalable.loadsOfLods$effectiveDivisor(divisor));
 		}
 		LoadsOfLods.LOGGER.warn(
-			"Atlas {} does not fit in {}x{}; downscaled its large sprites by {}x so it can be stitched",
+			"Atlas {} still does not fit in {}x{}; downscaled its large sprites by {}x so it can be stitched",
 			location,
-			maxSupportedTextureSize,
-			maxSupportedTextureSize,
+			limit,
+			limit,
 			divisor
 		);
 	}
 
 	@Unique
-	private boolean fits(List<SpriteContents> sprites, int maxMipmapLevels, int divisor) {
+	private static boolean loadsOfLods$fits(List<SpriteContents> sprites, int maxMipmapLevels, int divisor, int limit) {
 		int lowestOneBit = 1 << maxMipmapLevels;
 		int minTexel = Integer.MAX_VALUE;
 		SpriteFootprint[] footprints = new SpriteFootprint[sprites.size()];
@@ -81,7 +98,7 @@ public abstract class SpriteLoaderOverflowMixin {
 		int mipLevel = Math.min(Mth.log2(Math.min(minTexel, lowestOneBit)), maxMipmapLevels);
 		Options options = Minecraft.getInstance().options;
 		int anisotropyBit = options.textureFiltering().get() != TextureFilteringMethod.ANISOTROPIC ? 0 : options.maxAnisotropyBit().get();
-		Stitcher<SpriteFootprint> stitcher = new Stitcher<>(maxSupportedTextureSize, maxSupportedTextureSize, mipLevel, anisotropyBit);
+		Stitcher<SpriteFootprint> stitcher = new Stitcher<>(limit, limit, mipLevel, anisotropyBit);
 		for (SpriteFootprint footprint : footprints) {
 			stitcher.registerSprite(footprint);
 		}

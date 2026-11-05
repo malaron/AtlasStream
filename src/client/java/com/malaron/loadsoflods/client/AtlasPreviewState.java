@@ -123,10 +123,11 @@ public final class AtlasPreviewState {
 		boolean defer = deferActivationUntilIris;
 		deferActivationUntilIris = false;
 		try {
+			TextureAtlasAccessor geometry = (TextureAtlasAccessor) atlas;
 			highResolutionTexture = atlas.getTexture();
-			atlasWidth = highResolutionTexture.getWidth(0);
-			atlasHeight = highResolutionTexture.getHeight(0);
-			mipLevelCount = highResolutionTexture.getMipLevels();
+			atlasWidth = geometry.loadsOfLods$getWidth();
+			atlasHeight = geometry.loadsOfLods$getHeight();
+			mipLevelCount = geometry.loadsOfLods$getMipLevelCount();
 			regions = snapshotRegions(atlas, atlasWidth, atlasHeight);
 			downscaleFactor = selectDownscaleFactor(regions, atlasWidth, atlasHeight);
 			// The PBR images only need the resource pack, so they can be built before Iris has its pipeline.
@@ -173,6 +174,9 @@ public final class AtlasPreviewState {
 						highResolutionTexture,
 						image,
 						regions,
+						atlasWidth,
+						atlasHeight,
+						mipLevelCount,
 						releaseHighResolutionAtlas
 					);
 				}
@@ -981,8 +985,12 @@ public final class AtlasPreviewState {
 	// and the full atlas is gone, so the preview must be rebuilt through a resource reload.
 	private static boolean irisSwitchNeedsRebuild() {
 		return distancePreviewEnabled && atlasOwnsLowResolutionTexture && nearAtlas == null
-			&& SodiumLodBridge.isIrisShaderPackInUse();
+			&& !nearAtlasUnavailable && SodiumLodBridge.isIrisShaderPackInUse();
 	}
+
+	// The Iris build could not create a near atlas (for example the atlas exceeds the sparse texture limit), so
+	// rebuilding again would not help.
+	private static boolean nearAtlasUnavailable;
 
 	// Shaders were switched off while the Iris preview was active: terrain needs the streamed (non-Iris) preview.
 	private static boolean shadersSwitchedOffNeedsRebuild() {
@@ -1028,6 +1036,11 @@ public final class AtlasPreviewState {
 	public static synchronized void armLaunchRebuild() {
 		reloadRebuildPending = true;
 		launchRebuild = true;
+	}
+
+	// A virtual block atlas has no usable texture until the preview is built, so every upload must rebuild it.
+	public static synchronized void armVirtualRebuild() {
+		armLaunchRebuild();
 	}
 
 	private static boolean previewPrerequisitesMet() {
@@ -1539,6 +1552,9 @@ public final class AtlasPreviewState {
 		GpuTexture highResolutionTexture,
 		LowAtlasImage image,
 		List<SpriteRegion> regions,
+		int atlasWidth,
+		int atlasHeight,
+		int atlasMipLevels,
 		boolean releaseHighResolutionAtlas
 	) {
 		var device = RenderSystem.getDevice();
@@ -1548,8 +1564,8 @@ public final class AtlasPreviewState {
 			GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING
 				| GpuTexture.USAGE_RENDER_ATTACHMENT,
 			highResolutionTexture.getFormat(),
-			highResolutionTexture.getWidth(0) / image.downscaleFactor(),
-			highResolutionTexture.getHeight(0) / image.downscaleFactor(),
+			atlasWidth / image.downscaleFactor(),
+			atlasHeight / image.downscaleFactor(),
 			highResolutionTexture.getDepthOrLayers(),
 			image.mipLevels().size()
 		);
@@ -1566,10 +1582,10 @@ public final class AtlasPreviewState {
 			}
 			encoder.submit();
 			pageTable = new VirtualTextureGpuPageTable(
-				highResolutionTexture.getWidth(0),
-				highResolutionTexture.getHeight(0),
+				atlasWidth,
+				atlasHeight,
 				VIRTUAL_TILE_SIZE,
-				highResolutionTexture.getMipLevels(),
+				atlasMipLevels,
 				generation
 			);
 			int cacheMipLevels = Math.min(
@@ -1580,11 +1596,7 @@ public final class AtlasPreviewState {
 				LoadsOfLodsClient.getConfig().highResolutionCacheMiB(),
 				1024L * 1024
 			);
-			long atlasBudgetBytes = estimateTextureBytes(
-				highResolutionTexture.getWidth(0),
-				highResolutionTexture.getHeight(0),
-				highResolutionTexture.getMipLevels()
-			) / 4;
+			long atlasBudgetBytes = estimateTextureBytes(atlasWidth, atlasHeight, atlasMipLevels) / 4;
 			long minimumCacheBytes = 0;
 			for (int mip = 0; mip < cacheMipLevels; mip++) {
 				long mipSize = Math.max(1, VIRTUAL_TILE_SIZE >> mip);
@@ -1600,17 +1612,13 @@ public final class AtlasPreviewState {
 				cacheMipLevels,
 				cacheBudgetBytes
 			);
-			metadataTexture = createVirtualTextureMetadata(
-				highResolutionTexture.getWidth(0),
-				highResolutionTexture.getHeight(0),
-				highResolutionTexture.getMipLevels()
-			);
+			metadataTexture = createVirtualTextureMetadata(atlasWidth, atlasHeight, atlasMipLevels);
 			VirtualTextureTileBuilder tileBuilder = createVirtualTextureTileBuilder(
 				atlas,
 				regions,
-				highResolutionTexture.getWidth(0),
-				highResolutionTexture.getHeight(0),
-				highResolutionTexture.getMipLevels(),
+				atlasWidth,
+				atlasHeight,
+				atlasMipLevels,
 				generation
 			);
 			lowResolutionTexture = texture;
@@ -1620,8 +1628,8 @@ public final class AtlasPreviewState {
 			virtualTextureGpuCache = tileCache;
 			virtualTextureMetadataTexture = metadataTexture;
 			virtualTextureLayout = new VirtualTextureLayout(
-				highResolutionTexture.getWidth(0),
-				highResolutionTexture.getHeight(0),
+				atlasWidth,
+				atlasHeight,
 				VIRTUAL_TILE_SIZE,
 				0
 			);
@@ -1635,15 +1643,18 @@ public final class AtlasPreviewState {
 					: null;
 				if (image.pbrImages() != null) {
 					NearAtlas created = NearAtlas.create(
-						highResolutionTexture.getWidth(0),
-						highResolutionTexture.getHeight(0),
-						highResolutionTexture.getMipLevels(),
+						atlasWidth,
+						atlasHeight,
+						atlasMipLevels,
 						net.minecraft.client.Minecraft.getInstance().getResourceManager()
 					);
 					if (nearAtlas != null) {
 						nearAtlas.close();
 					}
 					nearAtlas = created;
+					nearAtlasUnavailable = created == null;
+				} else {
+					nearAtlasUnavailable = false;
 				}
 				replaceBlockAtlasWithLowResolution(atlas, highResolutionTexture, texture, textureView);
 				if (image.pbrImages() != null) {
@@ -1946,7 +1957,7 @@ public final class AtlasPreviewState {
 		int atlasHeight,
 		int mipLevelCount
 	) {
-		if (atlasWidth <= 0 || atlasWidth > 65535 || atlasHeight <= 0 || atlasHeight > 65535
+		if (atlasWidth <= 0 || atlasWidth > 65536 || atlasHeight <= 0 || atlasHeight > 65536
 				|| mipLevelCount <= 0 || mipLevelCount > 255) {
 			throw new IllegalArgumentException("Virtual texture metadata is outside its supported range");
 		}
@@ -1966,10 +1977,13 @@ public final class AtlasPreviewState {
 			view = device.createTextureView(texture);
 			NativeImage image = new NativeImage(2, 1, true);
 			try (image) {
-				int red = atlasWidth & 0xFF;
-				int green = atlasWidth >>> 8;
-				int blue = atlasHeight & 0xFF;
-				int alpha = atlasHeight >>> 8;
+				// The sizes are stored minus one so a 65536 texel atlas still fits in two bytes.
+				int storedWidth = atlasWidth - 1;
+				int storedHeight = atlasHeight - 1;
+				int red = storedWidth & 0xFF;
+				int green = storedWidth >>> 8;
+				int blue = storedHeight & 0xFF;
+				int alpha = storedHeight >>> 8;
 				image.setPixel(0, 0, (alpha << 24) | (blue << 16) | (green << 8) | red);
 				image.setPixel(1, 0, mipLevelCount << 16);
 				var encoder = device.createCommandEncoder();
@@ -2018,8 +2032,8 @@ public final class AtlasPreviewState {
 	) {
 		TextureAtlasAccessor atlasAccessor = (TextureAtlasAccessor) atlas;
 		AbstractTextureAccessor textureAccessor = (AbstractTextureAccessor) atlas;
-		int originalWidth = highResolutionTexture.getWidth(0);
-		int originalHeight = highResolutionTexture.getHeight(0);
+		int originalWidth = ((TextureAtlasAccessor) atlas).loadsOfLods$getWidth();
+		int originalHeight = ((TextureAtlasAccessor) atlas).loadsOfLods$getHeight();
 		originalAtlasReleaseConfirmed = false;
 		GpuTextureView[] oldMipViews = atlasAccessor.loadsOfLods$getMipViews();
 		GpuTextureView oldTextureView = textureAccessor.loadsOfLods$getTextureView();

@@ -26,8 +26,8 @@ bool loadsOfLodsLookupVirtualTile(
     vec4 metadata = texelFetch(u_VirtualAtlasMetadata, ivec2(0), 0);
     vec4 mipMetadata = texelFetch(u_VirtualAtlasMetadata, ivec2(1, 0), 0);
     ivec2 atlasSize = ivec2(
-        round(metadata.r * 255.0) + round(metadata.g * 255.0) * 256.0,
-        round(metadata.b * 255.0) + round(metadata.a * 255.0) * 256.0
+        round(metadata.r * 255.0) + round(metadata.g * 255.0) * 256.0 + 1.0,
+        round(metadata.b * 255.0) + round(metadata.a * 255.0) * 256.0 + 1.0
     );
     // textureQueryLod clamps to the reduced atlas's mip range and would hide the finest virtual mips.
     vec2 dx = du * vec2(atlasSize);
