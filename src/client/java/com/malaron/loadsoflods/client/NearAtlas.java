@@ -69,6 +69,10 @@ final class NearAtlas implements AutoCloseable {
 	private int shelfCursorY;
 	private boolean misalignedLogged;
 	private boolean overflowLogged;
+	// Set when the compact atlas had no free slot; makes the next refresh evict sprites nobody needs.
+	private boolean slotsFull;
+	private boolean slotPressure;
+	private int slotWaits;
 	private final int mipLevels;
 	private final ResourceManager resourceManager;
 	private final Layer albedo;
@@ -522,7 +526,9 @@ final class NearAtlas implements AutoCloseable {
 	private void evictUnneeded(Set<TextureAtlasSprite> needed, LodConfig config, boolean off, long now) {
 		long budget = config.highResolutionCacheMiB() * 1024L * 1024L;
 		long committed = committedBytes();
-		if (!off && committed <= budget) {
+		boolean pressure = slotPressure;
+		slotPressure = false;
+		if (!off && !pressure && committed <= budget) {
 			return;
 		}
 		long target = off ? 0L : budget / 10 * 9;
@@ -533,13 +539,18 @@ final class NearAtlas implements AutoCloseable {
 			}
 		}
 		if (victims.isEmpty()) {
+			if (pressure) {
+				// Everything resident is still needed, so the retried sprites have to keep waiting.
+				slotPressure = true;
+			}
 			return;
 		}
 		victims.sort(java.util.Comparator.comparingLong(sprite -> lastNeeded.getOrDefault(sprite, now)));
 		int previousBinding = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
 		long deadline = System.nanoTime() + EVICT_BUDGET_NANOS;
+		int maxEvictions = pressure ? MAX_EVICTIONS_PER_REFRESH * 8 : MAX_EVICTIONS_PER_REFRESH;
 		try {
-			for (int i = 0; i < victims.size() && i < MAX_EVICTIONS_PER_REFRESH && (off || committedBytes() > target); i++) {
+			for (int i = 0; i < victims.size() && i < maxEvictions && (off || pressure || committedBytes() > target); i++) {
 				evict(victims.get(i));
 				if (System.nanoTime() >= deadline) {
 					break;
@@ -772,7 +783,7 @@ final class NearAtlas implements AutoCloseable {
 		long bytes = committedBytes();
 		return List.of(
 			"Near sparse atlas: " + residentSprites + " sprites resident, " + (jobs.size() + incoming.size())
-				+ " pending, " + evictedSprites + " evicted, " + failedSprites + " failed",
+				+ " pending, " + evictedSprites + " evicted, " + failedSprites + " failed, " + slotWaits + " waited for a slot",
 			"Near animation: " + activeSprites.size() + " sprites active, " + uploadsPerSecond + " uploads/s, backlog avg "
 				+ String.format(java.util.Locale.ROOT, "%.0f", averageBacklog) + " peak " + displayedPeak,
 			"Near committed VRAM: " + String.format(java.util.Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024.0))
@@ -784,7 +795,15 @@ final class NearAtlas implements AutoCloseable {
 	private void startJob(TextureAtlasSprite sprite) {
 		Geometry geometry = geometry(sprite);
 		if (geometry == null) {
-			failedSprites++;
+			if (slotsFull) {
+				// Retried by the next refresh once eviction has freed space, instead of staying unresolved forever.
+				requested.remove(sprite);
+				slotsFull = false;
+				slotPressure = true;
+				slotWaits++;
+			} else {
+				failedSprites++;
+			}
 			return;
 		}
 		try {
@@ -852,6 +871,7 @@ final class NearAtlas implements AutoCloseable {
 		int slotH = Math.ceilDiv(h + 2 * padY, cell) * cell;
 		int[] slot = allocateSlot(slotW, slotH);
 		if (slot == null) {
+			slotsFull = true;
 			if (!overflowLogged) {
 				overflowLogged = true;
 				LoadsOfLods.LOGGER.warn(
