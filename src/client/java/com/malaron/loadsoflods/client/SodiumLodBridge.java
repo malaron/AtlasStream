@@ -125,7 +125,10 @@ public final class SodiumLodBridge {
 			}
 			return;
 		}
-		if (!distancePreview || translucent) {
+		// With Iris and the near atlas, translucent terrain is split by distance too so glass and water near the
+		// player use full-resolution textures. Far sections are drawn first to keep back-to-front order.
+		boolean splitTranslucent = translucent && isIrisShaderPackInUse() && AtlasPreviewState.isNearAtlasActive();
+		if (!distancePreview || (translucent && !splitTranslucent)) {
 			boolean restoreFullBatches = distancePreview
 				? translucent
 				: SPLIT_PASSES.remove(terrainRenderPass);
@@ -150,7 +153,10 @@ public final class SodiumLodBridge {
 		Vec3 cameraPosition = Minecraft.getInstance().gameRenderer.mainCamera().position();
 		Map<Boolean, FilteredListsByLod> filteredListsByTranslucency = filteredListCache(renderLists, cameraPosition);
 		try {
-			for (SectionLod lod : SectionLod.values()) {
+			SectionLod[] order = translucent
+				? new SectionLod[] { SectionLod.LOW_RESOLUTION, SectionLod.HIGH_RESOLUTION }
+				: SectionLod.values();
+			for (SectionLod lod : order) {
 				ACTIVE_LOD.set(lod);
 				try {
 					Object filteredLists = filteredRenderLists(
