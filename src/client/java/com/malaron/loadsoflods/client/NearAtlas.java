@@ -77,8 +77,8 @@ final class NearAtlas implements AutoCloseable {
 	private long lastPressureLog;
 	// Nearest distance in blocks from the camera to a section using each sprite; render thread only.
 	private java.util.Map<TextureAtlasSprite, Double> spriteDistance = new java.util.HashMap<>();
-	private static final long PRESSURE_EVICT_BUDGET_NANOS = 2_000_000L;
-	private static final int MAX_PRESSURE_EVICTIONS_PER_REFRESH = 32;
+	private static final long PRESSURE_EVICT_BUDGET_NANOS = 6_000_000L;
+	private static final int MAX_PRESSURE_EVICTIONS_PER_REFRESH = 128;
 	private static final double PRESSURE_SWAP_MARGIN_BLOCKS = 8.0;
 	private final int mipLevels;
 	private final ResourceManager resourceManager;
@@ -558,7 +558,7 @@ final class NearAtlas implements AutoCloseable {
 		}
 		evictUnneeded(needed, config, radius <= 0.0, now);
 		// Each free slot lets one waiting sprite of the same size try again, nearest first; the rest stay parked.
-		if (freedSlots > 0 && !waitingForSlot.isEmpty()) {
+		if (!waitingForSlot.isEmpty() && freeSlots.values().stream().anyMatch(slots -> !slots.isEmpty())) {
 			List<TextureAtlasSprite> waiting = new ArrayList<>(waitingForSlot);
 			waiting.sort(java.util.Comparator.comparingDouble(this::distanceOf));
 			java.util.Map<Long, Integer> free = new java.util.HashMap<>();
@@ -769,13 +769,13 @@ final class NearAtlas implements AutoCloseable {
 			return;
 		}
 		if (activeRefreshTicks-- <= 0) {
-			activeRefreshTicks = 3;
+			activeRefreshTicks = waitingForSlot.isEmpty() ? 3 : 1;
 			refreshSprites();
 		}
 		// Until the first sprites around the camera are resident the near terrain is drawn from the reduced atlas,
 		// so catch up faster than the steady-state limits allow.
-		int newJobLimit = warm ? MAX_NEW_JOBS_PER_TICK : MAX_NEW_JOBS_PER_TICK * 4;
-		int uploadLimit = warm ? MAX_UPLOADS_PER_TICK : MAX_UPLOADS_PER_TICK * 4;
+		int newJobLimit = warm && waitingForSlot.isEmpty() ? MAX_NEW_JOBS_PER_TICK : MAX_NEW_JOBS_PER_TICK * 4;
+		int uploadLimit = warm && waitingForSlot.isEmpty() ? MAX_UPLOADS_PER_TICK : MAX_UPLOADS_PER_TICK * 4;
 		for (int started = 0; started < newJobLimit; started++) {
 			TextureAtlasSprite sprite = incoming.poll();
 			if (sprite == null) {
