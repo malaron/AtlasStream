@@ -53,6 +53,32 @@ list before drawing, invalidating only the active terrain pass so other
 prepared passes remain cached. Its translucent pass is rebuilt from the
 complete list so the experimental split does not truncate transparent geometry.
 
+### Oversized packs: compact near atlas
+
+When a pack's stitched atlas is too large to keep (for example 256x packs at
+65536x32768), the vanilla block atlas becomes a tiny virtual placeholder and
+the near atlas is created as a *compact* sparse atlas (for example 16384x16384)
+that is much smaller than the layout. A small remap texture maps each 16x16
+texel layout cell to its slot in the compact atlas, and terrain vertex shaders
+translate UVs through it. With Iris this works by patching the shader text Iris
+generates for Sodium (`_get_texcoord` and `mc_midTexCoord`), so it depends on
+the Iris version: an Iris update that changes that text may need a matching
+change here. The log warns when `mc_midTexCoord` is present but could not be
+patched. If the compact atlas fills up, extra sprites are skipped.
+
+### Reduced-atlas disk cache
+
+Building the reduced atlas (and its PBR maps) takes tens of seconds for large
+packs, so the result is cached in `cache/loads-of-lods/<key>.bin` under the game
+directory. The key is a hash of the mod build, loaded mods, atlas layout,
+settings and the ordered resource pack stack, including each pack's size and
+modification time. Changing a pack, its order or any mod changes the key, so a
+fresh atlas is built instead of reusing a stale one. Packs that cannot be
+fingerprinted (for example server packs) skip the cache. Entries are checksummed
+(bad ones are deleted), the least recently used are pruned beyond 3 GiB, and
+animation data is always rebuilt from the packs. On a cache hit the log shows
+"Loaded the reduced atlas from the disk cache".
+
 ## Configuration
 
 On first launch the mod creates `config/loads-of-lods.properties`:
