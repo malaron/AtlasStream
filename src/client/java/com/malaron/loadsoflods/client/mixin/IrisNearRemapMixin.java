@@ -53,7 +53,7 @@ vec2 loadsOfLodsNearRemapEdge(vec2 uv) {
 }
 """;
 	private static final java.util.regex.Pattern MID_TEXCOORD = java.util.regex.Pattern.compile(
-		"vec2\\(mc_midTexCoord\\.xy\\) \\* (.*?)(?=\\)\\.xy;|, 0\\.0\\);|, 0\\.0, 1\\.0\\);)"
+		"vec2\\(mc_midTexCoord\\.xy\\) \\* ([0-9.]+(?:[eE][-+]?[0-9]+)?f?)"
 	);
 	private static boolean logged;
 	private static boolean midLogged;
