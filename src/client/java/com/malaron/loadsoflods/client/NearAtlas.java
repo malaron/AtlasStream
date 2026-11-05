@@ -74,6 +74,11 @@ final class NearAtlas implements AutoCloseable {
 	// Sprites that found no free slot. They stay in `requested` so nothing re-queues them until a slot is freed.
 	private final java.util.LinkedHashSet<TextureAtlasSprite> waitingForSlot = new java.util.LinkedHashSet<>();
 	private int freedSlots;
+	// Nearest distance in blocks from the camera to a section using each sprite; render thread only.
+	private java.util.Map<TextureAtlasSprite, Double> spriteDistance = new java.util.HashMap<>();
+	private static final long PRESSURE_EVICT_BUDGET_NANOS = 2_000_000L;
+	private static final int MAX_PRESSURE_EVICTIONS_PER_REFRESH = 32;
+	private static final double PRESSURE_SWAP_MARGIN_BLOCKS = 8.0;
 	private final int mipLevels;
 	private final ResourceManager resourceManager;
 	private final Layer albedo;
@@ -455,6 +460,7 @@ final class NearAtlas implements AutoCloseable {
 
 		Set<TextureAtlasSprite> active = new java.util.HashSet<>();
 		Set<TextureAtlasSprite> needed = new java.util.HashSet<>();
+		java.util.Map<TextureAtlasSprite, Double> distances = new java.util.HashMap<>();
 		if (radius > 0.0) {
 			var forward = cameraEntity.forwardVector();
 			double drawReach = radius + config.hysteresis();
@@ -474,6 +480,10 @@ final class NearAtlas implements AutoCloseable {
 					continue;
 				}
 				needed.addAll(entry.getValue());
+				double nearest = Math.max(0.0, distance - SECTION_RADIUS);
+				for (TextureAtlasSprite sprite : entry.getValue()) {
+					distances.merge(sprite, nearest, Math::min);
+				}
 				if (distance - SECTION_RADIUS > drawReach) {
 					continue;
 				}
@@ -503,6 +513,7 @@ final class NearAtlas implements AutoCloseable {
 				touched.remove();
 			} else if (age <= TOUCH_RECENT_NANOS) {
 				needed.add(entry.getKey());
+				distances.put(entry.getKey(), 0.0);
 				if (entry.getKey().contents().isAnimated()) {
 					active.add(entry.getKey());
 				}
@@ -522,15 +533,59 @@ final class NearAtlas implements AutoCloseable {
 			}
 		}
 		activeSprites = active;
+		spriteDistance = distances;
+		if (!waitingForSlot.isEmpty() && radius > 0.0) {
+			evictForWaitingSprites(needed, now);
+		}
 		evictUnneeded(needed, config, radius <= 0.0, now);
-		// Each freed slot lets one waiting sprite try again; the rest stay parked instead of being re-queued.
-		java.util.Iterator<TextureAtlasSprite> waiting = waitingForSlot.iterator();
-		while (freedSlots > 0 && waiting.hasNext()) {
-			incoming.add(waiting.next());
-			waiting.remove();
-			freedSlots--;
+		// Each freed slot lets one waiting sprite try again, nearest first; the rest stay parked.
+		if (freedSlots > 0 && !waitingForSlot.isEmpty()) {
+			List<TextureAtlasSprite> waiting = new ArrayList<>(waitingForSlot);
+			waiting.sort(java.util.Comparator.comparingDouble(this::distanceOf));
+			for (int i = 0; i < waiting.size() && i < freedSlots; i++) {
+				incoming.add(waiting.get(i));
+				waitingForSlot.remove(waiting.get(i));
+			}
 		}
 		freedSlots = 0;
+	}
+
+	private double distanceOf(TextureAtlasSprite sprite) {
+		return spriteDistance.getOrDefault(sprite, Double.MAX_VALUE);
+	}
+
+	// The compact atlas has no free slot for sprites that are needed. Make room by dropping the resident sprites
+	// that are farthest from the camera, as long as a waiting sprite is clearly nearer, so the nearest terrain
+	// always wins and nothing thrashes at the boundary.
+	private void evictForWaitingSprites(Set<TextureAtlasSprite> needed, long now) {
+		List<TextureAtlasSprite> waiting = new ArrayList<>(waitingForSlot);
+		waiting.sort(java.util.Comparator.comparingDouble(this::distanceOf));
+		List<TextureAtlasSprite> victims = new ArrayList<>(resident.keySet());
+		victims.sort(java.util.Comparator.comparingDouble(
+			(TextureAtlasSprite sprite) -> needed.contains(sprite) ? distanceOf(sprite) : Double.MAX_VALUE
+		).reversed());
+		int previousBinding = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+		long deadline = System.nanoTime() + PRESSURE_EVICT_BUDGET_NANOS;
+		try {
+			int limit = Math.min(MAX_PRESSURE_EVICTIONS_PER_REFRESH, Math.min(waiting.size(), victims.size()));
+			for (int i = 0; i < limit; i++) {
+				TextureAtlasSprite victim = victims.get(i);
+				double victimDistance = needed.contains(victim) ? distanceOf(victim) : Double.MAX_VALUE;
+				if (victimDistance <= distanceOf(waiting.get(i)) + PRESSURE_SWAP_MARGIN_BLOCKS) {
+					break;
+				}
+				evict(victim);
+				if (System.nanoTime() >= deadline) {
+					break;
+				}
+			}
+			checkGl("releasing sparse pages");
+		} catch (IllegalStateException exception) {
+			LoadsOfLods.LOGGER.error("Could not release near sprites", exception);
+			failed = true;
+		} finally {
+			GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousBinding);
+		}
 	}
 
 	private long committedBytes() {
@@ -542,16 +597,13 @@ final class NearAtlas implements AutoCloseable {
 	private void evictUnneeded(Set<TextureAtlasSprite> needed, LodConfig config, boolean off, long now) {
 		long budget = config.highResolutionCacheMiB() * 1024L * 1024L;
 		long committed = committedBytes();
-		boolean pressure = !waitingForSlot.isEmpty();
-		if (!off && !pressure && committed <= budget) {
+		if (!off && committed <= budget) {
 			return;
 		}
 		long target = off ? 0L : budget / 10 * 9;
-		// Sprites outside the draw range are already drawn from the reduced atlas, so slot pressure needs no grace.
-		long grace = pressure ? 0L : EVICT_GRACE_NANOS;
 		List<TextureAtlasSprite> victims = new ArrayList<>();
 		for (TextureAtlasSprite sprite : resident.keySet()) {
-			if (!needed.contains(sprite) && now - lastNeeded.getOrDefault(sprite, now) >= grace) {
+			if (!needed.contains(sprite) && now - lastNeeded.getOrDefault(sprite, now) >= EVICT_GRACE_NANOS) {
 				victims.add(sprite);
 			}
 		}
@@ -561,9 +613,8 @@ final class NearAtlas implements AutoCloseable {
 		victims.sort(java.util.Comparator.comparingLong(sprite -> lastNeeded.getOrDefault(sprite, now)));
 		int previousBinding = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
 		long deadline = System.nanoTime() + EVICT_BUDGET_NANOS;
-		int maxEvictions = pressure ? MAX_EVICTIONS_PER_REFRESH * 8 : MAX_EVICTIONS_PER_REFRESH;
 		try {
-			for (int i = 0; i < victims.size() && i < maxEvictions && (off || committedBytes() > target || (pressure && i < waitingForSlot.size())); i++) {
+			for (int i = 0; i < victims.size() && i < MAX_EVICTIONS_PER_REFRESH && (off || committedBytes() > target); i++) {
 				evict(victims.get(i));
 				if (System.nanoTime() >= deadline) {
 					break;
