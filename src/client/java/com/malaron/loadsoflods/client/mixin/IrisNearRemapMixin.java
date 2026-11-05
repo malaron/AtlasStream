@@ -136,10 +136,14 @@ vec2 loadsOfLodsAtlasRemap(vec2 uv) {
 				LoadsOfLods.LOGGER.warn("_get_texcoord() not found in an Iris-transformed Sodium vertex shader; near UV remap is unavailable");
 				continue;
 			}
-			String replaced = source.substring(0, function) + REMAP_FUNCTION + source.substring(function);
+			// Translucent terrain stays on the low atlas but shares these programs, so the remap only applies when the
+			// bound diffuse texture is the compact near atlas.
+			String atlasFunctions = (GTEXTURE_DECLARATION.matcher(source).find() ? "" : "uniform sampler2D gtexture;\n")
+				+ ATLAS_ONLY_FUNCTION;
+			String replaced = source.substring(0, function) + REMAP_FUNCTION + atlasFunctions + source.substring(function);
 			replaced = replaced.replace(
 				TEXCOORD_RETURN,
-				"return loadsOfLodsNearRemap(vec2(a_TexCoord & TEXTURE_MAX_VALUE) / float(TEXTURE_MAX_COORD));"
+				"return loadsOfLodsAtlasRemap(vec2(a_TexCoord & TEXTURE_MAX_VALUE) / float(TEXTURE_MAX_COORD));"
 			);
 			// The sprite's mid coordinate is a separate attribute in layout space; packs compare it with the diffuse
 			// UV (for example to clamp to the sprite), so it has to move to the compact atlas as well.
@@ -148,7 +152,7 @@ vec2 loadsOfLodsAtlasRemap(vec2 uv) {
 				match -> {
 					midCount[0]++;
 					return java.util.regex.Matcher.quoteReplacement(
-						"loadsOfLodsNearRemap(vec2(mc_midTexCoord.xy) * " + match.group(1) + ")"
+						"loadsOfLodsAtlasRemap(vec2(mc_midTexCoord.xy) * " + match.group(1) + ")"
 					);
 				}
 			);
