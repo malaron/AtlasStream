@@ -941,6 +941,13 @@ final class NearAtlas implements AutoCloseable {
 				waitingForSlot.add(sprite);
 			} else {
 				failedSprites++;
+				if (failedSprites <= 20) {
+					LoadsOfLods.LOGGER.warn(
+						"Near atlas cannot place sprite {} ({}x{} at {},{} in the {}x{} layout, u0/v0 {}/{})",
+						sprite.contents().name(), sprite.contents().width(), sprite.contents().height(),
+						sprite.getX(), sprite.getY(), bigWidth, bigHeight, sprite.getU0(), sprite.getV0()
+					);
+				}
 			}
 			return;
 		}
