@@ -45,6 +45,9 @@ vec2 loadsOfLodsNearRemap(vec2 uv) {
     return (texel + vec2(dx, dy) * cell) / compactSize;
 }
 """;
+	private static final java.util.regex.Pattern MID_TEXCOORD = java.util.regex.Pattern.compile(
+		"vec2\\(mc_midTexCoord\\.xy\\) \\* (.*?)(?=\\)\\.xy;|, 0\\.0\\);|, 0\\.0, 1\\.0\\);)"
+	);
 	private static boolean logged;
 
 	@Inject(method = "patchSodium", at = @At("RETURN"), cancellable = true, remap = false)
@@ -69,6 +72,13 @@ vec2 loadsOfLodsNearRemap(vec2 uv) {
 			replaced = replaced.replace(
 				TEXCOORD_RETURN,
 				"return loadsOfLodsNearRemap(vec2(a_TexCoord & TEXTURE_MAX_VALUE) / float(TEXTURE_MAX_COORD));"
+			);
+			// The sprite's mid coordinate is a separate attribute in layout space; packs compare it with the diffuse
+			// UV (for example to clamp to the sprite), so it has to move to the compact atlas as well.
+			replaced = MID_TEXCOORD.matcher(replaced).replaceAll(
+				result -> java.util.regex.Matcher.quoteReplacement(
+					"loadsOfLodsNearRemap(vec2(mc_midTexCoord.xy) * " + result.group(1) + ")"
+				)
 			);
 			entry.setValue(replaced);
 			changed = true;
