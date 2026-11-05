@@ -302,10 +302,17 @@ public final class AtlasPreviewState {
 		guiItemDraw = value;
 	}
 
-	// Non-terrain draws (held blocks, falling blocks) sample the blocks atlas through its texture slot.
+	private static volatile boolean vanillaRemapAvailable;
+
+	public static void markVanillaRemapAvailable() {
+		vanillaRemapAvailable = true;
+	}
+
+	// Non-terrain draws (held blocks, falling blocks) sample the blocks atlas through its texture slot. In compact
+	// mode they get the compact atlas too, which only works because the vanilla vertex shaders remap their UVs.
 	public static GpuTextureView nearAtlasViewForSlot(Object atlas) {
 		NearAtlas near = nearAtlas;
-		if (near == null || near.isCompact() || guiItemDraw || atlas != previewedAtlas || !near.isUsable() || !SodiumLodBridge.isIrisShaderPackInUse()) {
+		if (near == null || !slotUsesNearAtlas(near, atlas)) {
 			return null;
 		}
 		return near.albedoView();
@@ -313,10 +320,18 @@ public final class AtlasPreviewState {
 
 	public static GpuTexture nearAtlasTextureForSlot(Object atlas) {
 		NearAtlas near = nearAtlas;
-		if (near == null || near.isCompact() || guiItemDraw || atlas != previewedAtlas || !near.isUsable() || !SodiumLodBridge.isIrisShaderPackInUse()) {
+		if (near == null || !slotUsesNearAtlas(near, atlas)) {
 			return null;
 		}
 		return near.albedoTexture();
+	}
+
+	private static boolean slotUsesNearAtlas(NearAtlas near, Object atlas) {
+		return (!near.isCompact() || vanillaRemapAvailable)
+			&& !guiItemDraw
+			&& atlas == previewedAtlas
+			&& near.isUsable()
+			&& SodiumLodBridge.isIrisShaderPackInUse();
 	}
 
 	public static GpuTextureView nearRemapView() {

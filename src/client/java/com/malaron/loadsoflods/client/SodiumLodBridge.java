@@ -212,9 +212,9 @@ public final class SodiumLodBridge {
 			);
 			java.util.function.IntSupplier id = () -> {
 				SectionLod lod = ACTIVE_LOD.get();
-				return lod == SectionLod.HIGH_RESOLUTION && AtlasPreviewState.isDistancePreviewEnabled()
-					? AtlasPreviewState.nearRemapGlId()
-					: AtlasPreviewState.nearPlaceholderGlId();
+				// Vanilla-style programs (no active terrain LOD) guard the remap themselves by the bound texture size.
+				boolean remap = (lod == SectionLod.HIGH_RESOLUTION || lod == null) && AtlasPreviewState.isDistancePreviewEnabled();
+				return remap ? AtlasPreviewState.nearRemapGlId() : AtlasPreviewState.nearPlaceholderGlId();
 			};
 			java.util.function.Supplier<Object> sampler = () -> null;
 			method.invoke(samplerHolder, type, id, sampler, new String[] {"u_LodsNearRemap"});

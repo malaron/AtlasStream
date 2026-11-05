@@ -50,6 +50,73 @@ vec2 loadsOfLodsNearRemap(vec2 uv) {
 	);
 	private static boolean logged;
 	private static boolean midLogged;
+	private static boolean vanillaLogged;
+	private static final java.util.regex.Pattern UV0_DECLARATION = java.util.regex.Pattern.compile(
+		"in\\s+vec2\\s+iris_UV0\\s*;"
+	);
+	private static final java.util.regex.Pattern GTEXTURE_DECLARATION = java.util.regex.Pattern.compile(
+		"uniform\\s+(?:\\w+\\s+)*sampler2D\\s+gtexture\\s*;"
+	);
+	// Vanilla-style programs (entities, hand, particles) draw many textures, so the remap only applies when the
+	// bound diffuse texture has the compact near atlas's size.
+	private static final String ATLAS_ONLY_FUNCTION = """
+vec2 loadsOfLodsAtlasRemap(vec2 uv) {
+    ivec2 remapSize = textureSize(u_LodsNearRemap, 0);
+    if (remapSize.x <= 1) {
+        return uv;
+    }
+    vec4 header0 = texelFetch(u_LodsNearRemap, ivec2(0, remapSize.y - 1), 0);
+    ivec2 compactSize = ivec2(
+        floor(header0.r * 255.0 + 0.5) + floor(header0.g * 255.0 + 0.5) * 256.0,
+        floor(header0.b * 255.0 + 0.5) + floor(header0.a * 255.0 + 0.5) * 256.0
+    ) + 1;
+    if (textureSize(gtexture, 0) != compactSize) {
+        return uv;
+    }
+    return loadsOfLodsNearRemap(uv);
+}
+""";
+
+	@Inject(method = "patchVanilla", at = @At("RETURN"), cancellable = true, remap = false, require = 0)
+	private static void loadsOfLods$remapVanilla(CallbackInfoReturnable<Map<Object, String>> callback) {
+		Map<Object, String> result = callback.getReturnValue();
+		if (result == null) {
+			return;
+		}
+		Map<Object, String> patched = new LinkedHashMap<>(result);
+		boolean changed = false;
+		for (Map.Entry<Object, String> entry : patched.entrySet()) {
+			if (!"VERTEX".equals(String.valueOf(entry.getKey()))) {
+				continue;
+			}
+			String source = entry.getValue();
+			java.util.regex.Matcher declaration = UV0_DECLARATION.matcher(source);
+			if (!declaration.find()) {
+				continue;
+			}
+			String head = source.substring(0, declaration.end());
+			String tail = source.substring(declaration.end());
+			String functions = REMAP_FUNCTION
+				+ (GTEXTURE_DECLARATION.matcher(source).find() ? "" : "uniform sampler2D gtexture;\n")
+				+ ATLAS_ONLY_FUNCTION;
+			tail = tail.replaceAll("\\biris_UV0\\b", "loadsOfLodsAtlasRemap(iris_UV0)");
+			tail = MID_TEXCOORD.matcher(tail).replaceAll(
+				match -> java.util.regex.Matcher.quoteReplacement(
+					"loadsOfLodsAtlasRemap(vec2(mc_midTexCoord.xy) * " + match.group(1) + ")"
+				)
+			);
+			entry.setValue(head + "\n" + functions + tail);
+			changed = true;
+		}
+		if (changed) {
+			com.malaron.loadsoflods.client.AtlasPreviewState.markVanillaRemapAvailable();
+			if (!vanillaLogged) {
+				vanillaLogged = true;
+				LoadsOfLods.LOGGER.info("Patched Iris-transformed vanilla vertex shaders for the near UV remap");
+			}
+			callback.setReturnValue(patched);
+		}
+	}
 
 	@Inject(method = "patchSodium", at = @At("RETURN"), cancellable = true, remap = false)
 	private static void loadsOfLods$remap(CallbackInfoReturnable<Map<Object, String>> callback) {
