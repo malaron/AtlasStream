@@ -47,13 +47,14 @@ final class IrisPbrAtlasReducer {
 		int lowWidth,
 		int lowHeight,
 		int mipLevelCount,
-		int factor
+		int factor,
+		PackTileCache tiles
 	) throws IOException {
 		// Normal and specular are independent, so overlap them to hide file and decode stalls.
 		CompletableFuture<List<NativeImage>> specularFuture = CompletableFuture.supplyAsync(() -> {
 			try {
 				return buildKind(
-					resourceManager, regions, lowWidth, lowHeight, mipLevelCount, factor,
+					resourceManager, regions, lowWidth, lowHeight, mipLevelCount, factor, tiles,
 					"_s", DEFAULT_SPECULAR, IrisPbrAtlasReducer::averageSpecular
 				);
 			} catch (IOException exception) {
@@ -63,7 +64,7 @@ final class IrisPbrAtlasReducer {
 		List<NativeImage> normal;
 		try {
 			normal = buildKind(
-				resourceManager, regions, lowWidth, lowHeight, mipLevelCount, factor,
+				resourceManager, regions, lowWidth, lowHeight, mipLevelCount, factor, tiles,
 				"_n", DEFAULT_NORMAL, IrisPbrAtlasReducer::averageNormal
 			);
 		} catch (IOException | RuntimeException | Error exception) {
@@ -257,6 +258,7 @@ final class IrisPbrAtlasReducer {
 		int lowHeight,
 		int mipLevelCount,
 		int factor,
+		PackTileCache tiles,
 		String suffix,
 		int defaultPixel,
 		PixelAverager averager
@@ -280,8 +282,21 @@ final class IrisPbrAtlasReducer {
 				if (resource.isEmpty()) {
 					return;
 				}
+				PackTileCache.Pack tilePack = tiles.forPack(resource.get().sourcePackId());
+				String tileKey = PackTileCache.key(suffix.charAt(1), region);
+				int[] cachedTile = tilePack == null ? null : tilePack.get(tileKey, AtlasPreviewState.tilePixels(region, factor));
+				if (cachedTile != null) {
+					writeSprite(atlas, cachedTile, region, factor);
+					tiles.hits.incrementAndGet();
+					return;
+				}
+				tiles.decoded.incrementAndGet();
 				try (InputStream input = resource.get().open(); NativeImage source = NativeImage.read(input)) {
-					writeSprite(atlas, source, region, factor, new int[factor * factor], averager);
+					int[] tile = reduceSprite(source, region, factor, new int[factor * factor], averager);
+					writeSprite(atlas, tile, region, factor);
+					if (tilePack != null) {
+						tilePack.put(tileKey, tile);
+					}
 				} catch (IOException | RuntimeException exception) {
 					LoadsOfLods.LOGGER.warn("Leaving PBR sprite {} at its default: {}", id, exception.getMessage());
 				}
@@ -301,6 +316,32 @@ final class IrisPbrAtlasReducer {
 
 	private static void writeSprite(
 		NativeImage atlas,
+		int[] tile,
+		SpriteRegion region,
+		int factor
+	) {
+		int firstLowX = -region.paddingX() / factor;
+		int lastLowX = (region.width() + region.paddingX()) / factor - 1;
+		int firstLowY = -region.paddingY() / factor;
+		int lastLowY = (region.height() + region.paddingY()) / factor - 1;
+		int tileWidth = lastLowX - firstLowX + 1;
+		for (int lowY = firstLowY; lowY <= lastLowY; lowY++) {
+			int targetY = region.y() / factor + lowY;
+			if (targetY < 0 || targetY >= atlas.getHeight()) {
+				continue;
+			}
+			for (int lowX = firstLowX; lowX <= lastLowX; lowX++) {
+				int targetX = region.x() / factor + lowX;
+				if (targetX < 0 || targetX >= atlas.getWidth()) {
+					continue;
+				}
+				atlas.setPixel(targetX, targetY, tile[(lowY - firstLowY) * tileWidth + (lowX - firstLowX)]);
+			}
+		}
+	}
+
+	// The reduced pixels of a sprite including its padding, row by row; independent of where it sits in the atlas.
+	private static int[] reduceSprite(
 		NativeImage source,
 		SpriteRegion region,
 		int factor,
@@ -317,16 +358,10 @@ final class IrisPbrAtlasReducer {
 		int lastLowX = (region.width() + region.paddingX()) / factor - 1;
 		int firstLowY = -region.paddingY() / factor;
 		int lastLowY = (region.height() + region.paddingY()) / factor - 1;
+		int tileWidth = lastLowX - firstLowX + 1;
+		int[] tile = new int[tileWidth * (lastLowY - firstLowY + 1)];
 		for (int lowY = firstLowY; lowY <= lastLowY; lowY++) {
-			int targetY = region.y() / factor + lowY;
-			if (targetY < 0 || targetY >= atlas.getHeight()) {
-				continue;
-			}
 			for (int lowX = firstLowX; lowX <= lastLowX; lowX++) {
-				int targetX = region.x() / factor + lowX;
-				if (targetX < 0 || targetX >= atlas.getWidth()) {
-					continue;
-				}
 				int count = 0;
 				for (int sampleY = 0; sampleY < factor; sampleY++) {
 					int relativeY = Math.clamp(lowY * factor + sampleY, 0, region.height() - 1);
@@ -337,9 +372,10 @@ final class IrisPbrAtlasReducer {
 						samples[count++] = source.getPixel(sourceX, sourceY);
 					}
 				}
-				atlas.setPixel(targetX, targetY, averageSamples(samples, count, averager));
+				tile[(lowY - firstLowY) * tileWidth + (lowX - firstLowX)] = averageSamples(samples, count, averager);
 			}
 		}
+		return tile;
 	}
 
 	// Box-filters factor*factor samples by averaging pairs-of-four down to a single pixel.

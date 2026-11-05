@@ -1362,6 +1362,7 @@ public final class AtlasPreviewState {
 			}
 		}
 		CompletableFuture<IrisPbrAtlasReducer.Images> pbrFuture = null;
+		PackTileCache tiles = new PackTileCache(downscaleFactor);
 		try {
 			NativeImage atlas = new NativeImage(lowAtlasWidth, lowAtlasHeight, true);
 			long buildStartNanos = System.nanoTime();
@@ -1371,7 +1372,7 @@ public final class AtlasPreviewState {
 				pbrFuture = CompletableFuture.supplyAsync(() -> {
 					try {
 						return IrisPbrAtlasReducer.build(
-							resourceManager, regions, lowAtlasWidth, lowAtlasHeight, lowMipLevelCount, downscaleFactor
+							resourceManager, regions, lowAtlasWidth, lowAtlasHeight, lowMipLevelCount, downscaleFactor, tiles
 						);
 					} catch (IOException exception) {
 						throw new java.io.UncheckedIOException(exception);
@@ -1397,6 +1398,17 @@ public final class AtlasPreviewState {
 					);
 					Resource resource = resourceManager.getResource(textureId)
 						.orElseThrow(() -> new IOException("Missing texture resource " + textureId));
+					// Animated sprites are decoded anyway for their frame data, so only static ones use cached tiles.
+					PackTileCache.Pack tilePack = region.animated() ? null : tiles.forPack(resource.sourcePackId());
+					String tileKey = PackTileCache.key('A', region);
+					int[] cachedTile = tilePack == null ? null : tilePack.get(tileKey, tilePixels(region, downscaleFactor));
+					if (cachedTile != null) {
+						blitTile(atlas, cachedTile, region, downscaleFactor);
+						tiles.hits.incrementAndGet();
+						loadedSprites.incrementAndGet();
+						return;
+					}
+					tiles.decoded.incrementAndGet();
 					BufferedImage source;
 					try (InputStream input = resource.open()) {
 						source = ImageIO.read(input);
@@ -1408,12 +1420,11 @@ public final class AtlasPreviewState {
 						if (source.getWidth() < region.width() || source.getHeight() < region.height()) {
 							throw new IOException("Texture dimensions do not match stitched sprite bounds");
 						}
-						writeSprite(
-							atlas,
-							source,
-							region,
-							downscaleFactor
-						);
+						int[] tile = reduceSprite(source, region, downscaleFactor);
+						blitTile(atlas, tile, region, downscaleFactor);
+						if (tilePack != null) {
+							tilePack.put(tileKey, tile);
+						}
 						if (isTiledPortalTexture(region)) {
 							SpriteRegion lowRegion = scaleRegion(region, downscaleFactor);
 							makeSpriteEdgesContinuous(
@@ -1479,6 +1490,7 @@ public final class AtlasPreviewState {
 				(System.nanoTime() - buildStartNanos) / 1_000_000L,
 				(System.nanoTime() - pbrWaitStartNanos) / 1_000_000L
 			);
+			tiles.save("albedo and PBR");
 			if (cacheKey != null && (!reducePbr || pbrImages != null)) {
 				ReducedAtlasCache.store(cacheKey, mipLevels, pbrImages);
 			}
@@ -2606,27 +2618,45 @@ public final class AtlasPreviewState {
 		return region.identifier().getPath().equals("block/nether_portal");
 	}
 
-	private static void writeSprite(
-		NativeImage atlas,
-		BufferedImage source,
-		SpriteRegion region,
-		int downscaleFactor
-	) {
+	static int tilePixels(SpriteRegion region, int factor) {
+		int width = (region.width() + region.paddingX()) / factor + region.paddingX() / factor;
+		int height = (region.height() + region.paddingY()) / factor + region.paddingY() / factor;
+		return width * height;
+	}
+
+	// The reduced pixels of a sprite including its padding, row by row; independent of where it sits in the atlas.
+	static int[] reduceSprite(BufferedImage source, SpriteRegion region, int downscaleFactor) {
 		int firstLowX = -region.paddingX() / downscaleFactor;
 		int lastLowX = (region.width() + region.paddingX()) / downscaleFactor - 1;
 		int firstLowY = -region.paddingY() / downscaleFactor;
 		int lastLowY = (region.height() + region.paddingY()) / downscaleFactor - 1;
+		int tileWidth = lastLowX - firstLowX + 1;
+		int[] tile = new int[tileWidth * (lastLowY - firstLowY + 1)];
 		for (int lowY = firstLowY; lowY <= lastLowY; lowY++) {
 			int relativeY = lowY * downscaleFactor;
-			int targetY = region.y() / downscaleFactor + lowY;
 			int sourceY = Math.clamp(relativeY, 0, Math.min(source.getHeight(), region.height()) - 1);
 			for (int lowX = firstLowX; lowX <= lastLowX; lowX++) {
 				int relativeX = lowX * downscaleFactor;
-				int targetX = region.x() / downscaleFactor + lowX;
 				int sourceX = Math.clamp(relativeX, 0, Math.min(source.getWidth(), region.width()) - 1);
-				int color = averageSourcePixels(source, sourceX, sourceY, region.width(), region.height(), downscaleFactor);
+				tile[(lowY - firstLowY) * tileWidth + (lowX - firstLowX)] =
+					averageSourcePixels(source, sourceX, sourceY, region.width(), region.height(), downscaleFactor);
+			}
+		}
+		return tile;
+	}
+
+	static void blitTile(NativeImage atlas, int[] tile, SpriteRegion region, int downscaleFactor) {
+		int firstLowX = -region.paddingX() / downscaleFactor;
+		int lastLowX = (region.width() + region.paddingX()) / downscaleFactor - 1;
+		int firstLowY = -region.paddingY() / downscaleFactor;
+		int lastLowY = (region.height() + region.paddingY()) / downscaleFactor - 1;
+		int tileWidth = lastLowX - firstLowX + 1;
+		for (int lowY = firstLowY; lowY <= lastLowY; lowY++) {
+			int targetY = region.y() / downscaleFactor + lowY;
+			for (int lowX = firstLowX; lowX <= lastLowX; lowX++) {
+				int targetX = region.x() / downscaleFactor + lowX;
 				if (targetX >= 0 && targetY >= 0 && targetX < atlas.getWidth() && targetY < atlas.getHeight()) {
-					atlas.setPixel(targetX, targetY, color);
+					atlas.setPixel(targetX, targetY, tile[(lowY - firstLowY) * tileWidth + (lowX - firstLowX)]);
 				}
 			}
 		}

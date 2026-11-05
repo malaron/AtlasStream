@@ -91,6 +91,14 @@ fingerprinted (for example server packs) skip the cache. Entries are checksummed
 animation data is always rebuilt from the packs. On a cache hit the log shows
 "Loaded the reduced atlas from the disk cache".
 
+A second, per-pack cache (`cache/loads-of-lods/tiles/`) stores each reduced
+sprite tile under the pack that provided its texture (keyed by that pack's size
+and modification time, or the mod version). When the pack stack changes, only
+sprites whose providing pack changed are decoded again; the rest are copied from
+the tile files and the mip levels are rebuilt. Animated sprites and sprites from
+packs that cannot be fingerprinted are always decoded. The log line
+"Tile cache (...)" shows how many sprites came from cached tiles.
+
 ## Configuration
 
 On first launch the mod creates `config/loads-of-lods.properties`:

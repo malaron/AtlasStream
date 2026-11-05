@@ -106,7 +106,7 @@ final class ReducedAtlasCache {
 		digest.update((byte) 0);
 	}
 
-	private static boolean addPackFiles(MessageDigest digest, Path pack) throws IOException {
+	static boolean addPackFiles(MessageDigest digest, Path pack) throws IOException {
 		if (!Files.exists(pack)) {
 			return false;
 		}
