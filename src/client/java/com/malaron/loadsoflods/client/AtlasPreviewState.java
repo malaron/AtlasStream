@@ -319,6 +319,23 @@ public final class AtlasPreviewState {
 		return near != null && near.isUsable() && near.isCompact() ? near.remapView() : null;
 	}
 
+	public static int nearPlaceholderGlId() {
+		nearRemapPlaceholder();
+		try {
+			return (Integer) nearRemapPlaceholderTexture.getClass().getMethod("iris$getGlId").invoke(nearRemapPlaceholderTexture);
+		} catch (ReflectiveOperationException | RuntimeException exception) {
+			return 0;
+		}
+	}
+
+	public static int nearRemapGlId() {
+		NearAtlas near = nearAtlas;
+		if (near != null && near.isUsable() && near.isCompact() && near.remapGlId() != 0) {
+			return near.remapGlId();
+		}
+		return nearPlaceholderGlId();
+	}
+
 	private static GpuTexture nearRemapPlaceholderTexture;
 	private static GpuTextureView nearRemapPlaceholderView;
 

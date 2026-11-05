@@ -39,6 +39,5 @@ public abstract class SodiumVirtualTextureBindingsMixin {
 		renderPass.setUniform("u_VirtualTileAtlas", views.tileAtlas(), sampler);
 		renderPass.setUniform("u_VirtualPageTable", views.pageTable(), sampler);
 		renderPass.setUniform("u_VirtualAtlasMetadata", views.atlasMetadata(), sampler);
-		renderPass.setUniform("u_LodsNearRemap", SodiumLodBridge.nearRemapForCurrentPass(), sampler);
 	}
 }

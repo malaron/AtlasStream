@@ -240,6 +240,10 @@ final class NearAtlas implements AutoCloseable {
 		return remapView;
 	}
 
+	int remapGlId() {
+		return remapId;
+	}
+
 	private void createRemapTexture() {
 		int rows = cellsY + 1;
 		int previousBinding = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);

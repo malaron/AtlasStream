@@ -189,17 +189,45 @@ public final class SodiumLodBridge {
 		}
 	}
 
+	// Iris only binds samplers it registered itself, so the near remap texture is added to its terrain programs here.
+	public static void registerNearRemapSampler(Object samplerHolder) {
+		try {
+			Class<?> typeClass = Class.forName(
+				"net.irisshaders.iris.gl.texture.TextureType",
+				false,
+				SodiumLodBridge.class.getClassLoader()
+			);
+			Object type = typeClass.getField("TEXTURE_2D").get(null);
+			Class<?> holderClass = Class.forName(
+				"net.irisshaders.iris.gl.sampler.SamplerHolder",
+				false,
+				SodiumLodBridge.class.getClassLoader()
+			);
+			Method method = holderClass.getMethod(
+				"addDynamicSampler",
+				typeClass,
+				java.util.function.IntSupplier.class,
+				java.util.function.Supplier.class,
+				String[].class
+			);
+			java.util.function.IntSupplier id = () -> {
+				SectionLod lod = ACTIVE_LOD.get();
+				return lod == SectionLod.HIGH_RESOLUTION && AtlasPreviewState.isDistancePreviewEnabled()
+					? AtlasPreviewState.nearRemapGlId()
+					: AtlasPreviewState.nearPlaceholderGlId();
+			};
+			java.util.function.Supplier<Object> sampler = () -> null;
+			method.invoke(samplerHolder, type, id, sampler, new String[] {"u_LodsNearRemap"});
+		} catch (ReflectiveOperationException | RuntimeException exception) {
+			if (IRIS_PBR_LOOKUP_FAILURE_LOGGED.compareAndSet(false, true)) {
+				LoadsOfLods.LOGGER.error("Could not register the near remap sampler with Iris", exception);
+			}
+		}
+	}
+
 	// The remap texture is only bound while the near atlas is the albedo atlas of the pass; otherwise a 1x1
 	// placeholder makes the vertex shader leave UVs untouched.
 	public static com.mojang.renderpearl.api.textures.GpuTextureView nearRemapForCurrentPass() {
-		if (ACTIVE_LOD.get() == SectionLod.HIGH_RESOLUTION
-				&& AtlasPreviewState.isDistancePreviewEnabled()
-				&& isIrisShaderPackInUse()) {
-			com.mojang.renderpearl.api.textures.GpuTextureView remap = AtlasPreviewState.nearRemapView();
-			if (remap != null) {
-				return remap;
-			}
-		}
 		return AtlasPreviewState.nearRemapPlaceholder();
 	}
 
