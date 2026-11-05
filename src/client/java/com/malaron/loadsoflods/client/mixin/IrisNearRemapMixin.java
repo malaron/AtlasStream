@@ -76,8 +76,8 @@ vec2 loadsOfLodsNearRemap(vec2 uv) {
 			// The sprite's mid coordinate is a separate attribute in layout space; packs compare it with the diffuse
 			// UV (for example to clamp to the sprite), so it has to move to the compact atlas as well.
 			replaced = MID_TEXCOORD.matcher(replaced).replaceAll(
-				result -> java.util.regex.Matcher.quoteReplacement(
-					"loadsOfLodsNearRemap(vec2(mc_midTexCoord.xy) * " + result.group(1) + ")"
+				match -> java.util.regex.Matcher.quoteReplacement(
+					"loadsOfLodsNearRemap(vec2(mc_midTexCoord.xy) * " + match.group(1) + ")"
 				)
 			);
 			entry.setValue(replaced);
