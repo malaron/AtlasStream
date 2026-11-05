@@ -13,6 +13,8 @@
 		"PipelineCacheMixin",
 		"SpriteAnimationStateAccessor",
 		"SpriteContentsAccessor",
+		"SpriteContentsDownscaleMixin",
+		"SpriteLoaderOverflowMixin",
 		"SodiumChunkBuildPriorityMixin",
 		"SodiumTerrainRenderPassMixin",
 		"SodiumVirtualTextureBindingsMixin",

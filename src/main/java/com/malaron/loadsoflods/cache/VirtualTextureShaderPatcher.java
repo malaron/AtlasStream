@@ -34,6 +34,10 @@ bool loadsOfLodsLookupVirtualTile(
     vec2 dy = dv * vec2(atlasSize);
     float requestedLod = max(0.5 * log2(max(max(dot(dx, dx), dot(dy, dy)), 1e-8)), 0.0);
     int mipLevel = min(int(floor(requestedLod)), int(round(mipMetadata.r * 255.0)) - 1);
+    // Mips as coarse as the low atlas are never streamed, so skip the page-table lookup for them.
+    if (mipLevel >= int(round(log2(float(max(1, atlasSize.x)) / float(max(1, textureSize(u_BlockTex, 0).x)))))) {
+        return false;
+    }
     ivec2 mipSize = max(ivec2(1), atlasSize >> mipLevel);
     ivec2 texel = clamp(ivec2(floor(uv * vec2(mipSize))), ivec2(0), mipSize - 1);
     ivec2 tile = texel / 128;
