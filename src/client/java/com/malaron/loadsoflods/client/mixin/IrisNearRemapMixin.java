@@ -49,7 +49,7 @@ vec2 loadsOfLodsNearRemap(vec2 uv) {
     return loadsOfLodsNearRemapKeyed(uv, vec2(0.0));
 }
 vec2 loadsOfLodsNearRemapEdge(vec2 uv) {
-    return loadsOfLodsNearRemapKeyed(uv, mix(vec2(-0.25), vec2(0.25), bvec2(a_TexCoord >> TEXTURE_BITS)));
+    return loadsOfLodsNearRemapKeyed(uv, mix(vec2(0.25), vec2(-0.25), bvec2(a_TexCoord >> TEXTURE_BITS)));
 }
 """;
 	private static final java.util.regex.Pattern MID_TEXCOORD = java.util.regex.Pattern.compile(
