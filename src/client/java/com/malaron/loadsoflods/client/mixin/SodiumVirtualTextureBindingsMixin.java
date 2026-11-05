@@ -1,5 +1,6 @@
 package com.malaron.loadsoflods.client.mixin;
 
+import com.malaron.loadsoflods.LoadsOfLods;
 import com.malaron.loadsoflods.client.AtlasPreviewState;
 import com.malaron.loadsoflods.client.AtlasPreviewState.VirtualTextureSamplingViews;
 import com.malaron.loadsoflods.client.SodiumLodBridge;
@@ -39,5 +40,21 @@ public abstract class SodiumVirtualTextureBindingsMixin {
 		renderPass.setUniform("u_VirtualTileAtlas", views.tileAtlas(), sampler);
 		renderPass.setUniform("u_VirtualPageTable", views.pageTable(), sampler);
 		renderPass.setUniform("u_VirtualAtlasMetadata", views.atlasMetadata(), sampler);
+		if (SodiumLodBridge.isIrisShaderPackInUse() && views.atlasMetadata() != null) {
+			try {
+				renderPass.setUniform("u_LodsProbe", views.atlasMetadata(), sampler);
+				if (!probeLogged) {
+					probeLogged = true;
+					LoadsOfLods.LOGGER.info("Iris probe: bound u_LodsProbe on the terrain render pass without error");
+				}
+			} catch (RuntimeException exception) {
+				if (!probeLogged) {
+					probeLogged = true;
+					LoadsOfLods.LOGGER.warn("Iris probe: binding u_LodsProbe failed", exception);
+				}
+			}
+		}
 	}
+
+	private static boolean probeLogged;
 }

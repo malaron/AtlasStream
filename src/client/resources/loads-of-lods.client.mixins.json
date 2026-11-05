@@ -19,6 +19,7 @@
 		"SodiumChunkBuildPriorityMixin",
 		"SodiumTerrainRenderPassMixin",
 		"SodiumVirtualTextureBindingsMixin",
+		"IrisSodiumTransformProbeMixin",
 		"SodiumVirtualTextureLayoutMixin",
 		"SodiumWorldRendererMixin",
 		"TextureAtlasAccessor",
