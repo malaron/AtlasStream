@@ -388,6 +388,11 @@ public final class AtlasPreviewState {
 		return near == null || !near.isUsable() || near.isWarm();
 	}
 
+	public static boolean isNearSectionResolved(long sectionKey) {
+		NearAtlas near = nearAtlas;
+		return near == null || !near.isUsable() || near.sectionResolved(sectionKey);
+	}
+
 	public static boolean isNearAtlasActive() {
 		NearAtlas near = nearAtlas;
 		return near != null && near.isUsable();

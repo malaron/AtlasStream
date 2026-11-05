@@ -897,6 +897,10 @@ public final class SodiumLodBridge {
 			if (next == SectionLod.HIGH_RESOLUTION && !AtlasPreviewState.isNearAtlasWarm()) {
 				return SectionLod.LOW_RESOLUTION;
 			}
+			if (next == SectionLod.HIGH_RESOLUTION
+					&& !AtlasPreviewState.isNearSectionResolved(SodiumChunkMeshPriority.packSection(sectionX, sectionY, sectionZ))) {
+				return SectionLod.LOW_RESOLUTION;
+			}
 			levels[localSectionIndex] = next;
 			evaluated[localSectionIndex] = true;
 			return next;

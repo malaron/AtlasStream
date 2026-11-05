@@ -74,6 +74,7 @@ final class NearAtlas implements AutoCloseable {
 	// Sprites that found no free slot. They stay in `requested` so nothing re-queues them until a slot is freed.
 	private final java.util.LinkedHashSet<TextureAtlasSprite> waitingForSlot = new java.util.LinkedHashSet<>();
 	private int freedSlots;
+	private long lastPressureLog;
 	// Nearest distance in blocks from the camera to a section using each sprite; render thread only.
 	private java.util.Map<TextureAtlasSprite, Double> spriteDistance = new java.util.HashMap<>();
 	private static final long PRESSURE_EVICT_BUDGET_NANOS = 2_000_000L;
@@ -431,6 +432,24 @@ final class NearAtlas implements AutoCloseable {
 		}
 	}
 
+	// Render thread. In compact mode a sprite without a slot draws as a hole, so a section may only use this atlas
+	// once every sprite it uses is resident; otherwise it is drawn from the reduced atlas.
+	boolean sectionResolved(long sectionKey) {
+		if (!compact) {
+			return true;
+		}
+		Set<TextureAtlasSprite> sprites = sectionSprites.get(sectionKey);
+		if (sprites == null) {
+			return true;
+		}
+		for (TextureAtlasSprite sprite : sprites) {
+			if (!resident.containsKey(sprite)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	// Called when a section is about to be re-meshed; its sprite list is rebuilt by the mesh task.
 	void clearSection(long sectionKey) {
 		sectionSprites.put(sectionKey, ConcurrentHashMap.newKeySet());
@@ -565,6 +584,16 @@ final class NearAtlas implements AutoCloseable {
 			(TextureAtlasSprite sprite) -> needed.contains(sprite) ? distanceOf(sprite) : Double.MAX_VALUE
 		).reversed());
 		int previousBinding = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+		if (now - lastPressureLog > 5_000_000_000L && !waiting.isEmpty() && !victims.isEmpty()) {
+			lastPressureLog = now;
+			TextureAtlasSprite far = victims.get(0);
+			TextureAtlasSprite near = waiting.get(0);
+			LoadsOfLods.LOGGER.info(
+				"Slot pressure: nearest waiting {} at {} blocks ({}x{}), farthest resident {} at {} blocks, {} waiting, {} resident",
+				near.contents().name(), (int) distanceOf(near), near.contents().width(), near.contents().height(),
+				far.contents().name(), needed.contains(far) ? (int) distanceOf(far) : -1, waiting.size(), victims.size()
+			);
+		}
 		long deadline = System.nanoTime() + PRESSURE_EVICT_BUDGET_NANOS;
 		try {
 			int limit = Math.min(MAX_PRESSURE_EVICTIONS_PER_REFRESH, Math.min(waiting.size(), victims.size()));
