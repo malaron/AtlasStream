@@ -33,9 +33,17 @@ as a defect. Update entries as evidence is gathered or issues are resolved.
   evicted, and 3883/4160 MiB committed. The cache budget does not enlarge the
   compact texture's slot capacity. The untinted jump blur is not evidence of
   a switch to the reduced atlas; filtering or shader effects remain possible.
+  The grass top uses 16 repeating 1024x1024 CTM tiles and separate normal and
+  specular maps. The user reported the jump blur with shaders on but not off;
+  disabling Eclipse parallax and TAA did not remove it. Shader-off testing
+  showed a nearby magenta boundary and a full tile cache with 303 UV quads
+  pending. In that path, sufficiently coarse mip levels also sample the tinted
+  reduced atlas, so the tint boundary does not by itself establish the
+  world-distance boundary.
 - **Next investigation:** Evaluate larger compact atlas layouts and memory
-  costs, including slot placement and remapping limits, and test the jump
-  blur separately from the capacity issue.
+  costs, including slot placement and remapping limits. Compare the jump blur
+  against a smaller version of the same pack without the mod to separate
+  shader and pack behavior from the Iris near-atlas path.
 
 ### FPS drops in a complex world area with Kappa
 
