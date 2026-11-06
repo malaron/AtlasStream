@@ -48,7 +48,7 @@ sprites under slot pressure, as described below. With the distance at 0,
 all near memory is released. Its albedo and PBR content is
 streamed from the resource pack on worker threads; PBR maps stay vanilla
 (first frame only) while albedo animates, interpolated like vanilla, but only
-for sprites used by sections that are in range and in view. At a distance of 0
+for sprites used by sections that are in range and in view. When setting the distance to 0
 chunks, everything uses the low atlas and nothing animates in the near atlas.
 The mod registers the atlases with Iris's texture tracker so Iris still finds
 them. With an active Iris near atlas, translucent terrain is also split by
