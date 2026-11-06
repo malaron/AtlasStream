@@ -5,6 +5,7 @@
 	"client": [
 		"AbstractTextureAccessor",
 		"AbstractTexturePreviewMixin",
+		"BlockModelSpriteUsageMixin",
 		"ChunkVertexConsumerMixin",
 		"FirstPersonItemSpriteMixin",
 		"GuiItemAtlasMixin",
