@@ -5,6 +5,7 @@ import java.util.concurrent.Executor;
 
 import com.malaron.loadsoflods.LoadsOfLods;
 import com.malaron.loadsoflods.cache.VirtualTextureShaderPatcher;
+import com.malaron.loadsoflods.client.VirtualItemPipeline;
 import com.mojang.renderpearl.api.device.GpuDevice;
 import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
 import com.mojang.renderpearl.api.pipeline.RenderPipeline;
@@ -36,21 +37,35 @@ public abstract class PipelineCacheMixin {
 	) {
 		return device.compilePipeline(
 			pipeline,
-			new VirtualTextureShaderSource(source),
+			new VirtualTextureShaderSource(source, pipeline instanceof VirtualItemPipeline),
 			executor
 		);
 	}
 
 	private static final class VirtualTextureShaderSource implements ShaderSource {
 		private final ShaderSource delegate;
+		private final boolean virtualItem;
 
-		private VirtualTextureShaderSource(ShaderSource delegate) {
+		private VirtualTextureShaderSource(ShaderSource delegate, boolean virtualItem) {
 			this.delegate = delegate;
+			this.virtualItem = virtualItem;
 		}
 
 		@Override
 		public String getShader(Identifier shader, ShaderType type) {
 			String source = delegate.getShader(shader, type);
+			if (virtualItem && type == ShaderType.FRAGMENT
+					&& shader.equals(Identifier.withDefaultNamespace("core/item"))) {
+				if (source == null) {
+					return null;
+				}
+				String patched = VirtualTextureShaderPatcher.patchItem(source);
+				if (patched.equals(source) && !source.contains("u_VirtualPageTable")) {
+					LoadsOfLods.LOGGER.error("Could not add virtual-texture sampling to the item shader");
+					return null;
+				}
+				return patched;
+			}
 			if (type != ShaderType.FRAGMENT
 					|| !shader.getNamespace().equals("sodium")
 					|| !shader.getPath().equals("blocks/block_layer_opaque")) {

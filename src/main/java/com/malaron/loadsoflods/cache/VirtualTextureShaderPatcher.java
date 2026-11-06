@@ -117,4 +117,18 @@ vec4 loadsOfLodsSampleVirtualOrAtlas(vec2 uv, vec2 du, vec2 dv) {
 		patchApplied = true;
 		return patched;
 	}
+
+	public static String patchItem(String fragmentShader) {
+		String uniform = "uniform sampler2D Sampler0;";
+		String sample = "vec4 color = texture(Sampler0, texCoord0);";
+		if (fragmentShader.contains(MARKER)) {
+			return fragmentShader;
+		}
+		if (!fragmentShader.contains(uniform) || !fragmentShader.contains(sample)) {
+			return fragmentShader;
+		}
+		return fragmentShader
+			.replace(uniform, uniform + VIRTUAL_TEXTURE_FUNCTIONS.replace("u_BlockTex", "Sampler0"))
+			.replace(sample, "vec4 color = loadsOfLodsSampleVirtualOrAtlas(texCoord0, dFdx(texCoord0), dFdy(texCoord0));");
+	}
 }

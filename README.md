@@ -25,9 +25,10 @@ The current prototype provides:
 `/lods preview-distance` enables distance-based albedo LOD. Without an active
 Iris shaderpack, Sodium solid and cutout sections near the camera sample
 resident high-resolution tiles, and distant sections use the reduced atlas;
-the full high-resolution block-atlas GPU allocation is released. Because
-Minecraft shares this atlas with other block-atlas users, they also see the
-low-resolution fallback in this mode. A resource reload restores the
+the full high-resolution block-atlas GPU allocation is released. Held and
+dropped block-atlas item models also request nearby full-resolution tiles,
+using the reduced atlas while tiles load or after eviction. Inventory icons and
+other block-atlas users continue to use the reduced atlas. A resource reload restores the
 full-resolution atlas. Cached inventory item images are refreshed when the
 reduced atlas becomes ready, so temporary placeholder colors do not persist.
 With an Iris shaderpack active, the reduced atlas (albedo
@@ -195,8 +196,8 @@ on LRU eviction. This uses a 2D texture because Minecraft's current RenderPearl
 backend does not support texture arrays. Tiles are composed from Minecraft's
 stitched sprite mipmaps. Tiles touching animated sprites are drawn from the
 sprite's current full-resolution frame and rewritten in place when it changes,
-only for sprites used by sections within the streaming range (up to 8 tile
-rewrites and about 3 ms per tick, built on worker threads). Interpolated
+for sprites used by sections within the streaming range or by recently drawn
+block-item models (within a time-limited per-tick upload budget, built on worker threads). Interpolated
 animations are blended in 4 steps between frames. New tiles are also built on
 worker threads, nearest first, and the render thread only uploads finished
 tiles within a small time budget. Each mip level is requested only within its
@@ -211,8 +212,10 @@ than falling back at tile edges. The original atlas dimensions are
 supplied separately so page-table lookup remains correct after replacing the
 full atlas with the smaller fallback. Empty fallback bindings are allocated
 during block-atlas reload, not inside Sodium's active render pass. Shader
-patching is limited to the known Sodium chunk shader source; unsupported source
-variants log a warning and keep using the normal atlas. The configured cache
+patching targets the known Sodium chunk shader and Minecraft item shader sources;
+unsupported source variants log an error or warning and keep using the normal atlas.
+Block-item shaders are separate from regular items and GUI icons, preserve glint
+and translucent passes, and share the terrain cache. The configured cache
 budget bounds the 2D cache allocation, further limited to one quarter of the
 estimated full-atlas allocation to ensure the cache is smaller than the
 texture it replaces, and by the GPU's maximum RGBA8 texture dimensions and
@@ -242,7 +245,8 @@ Enabling distance preview schedules loaded Sodium
 terrain for remeshing so already-built sections also generate initial requests.
 `/lods cache` includes a lifetime count of completed UV quads to distinguish
 an empty request queue from a capture hook that is not running. Without Iris, tiles are
-requested only for sections within `highResolutionDistance + hysteresis + 32` blocks;
+requested for sections within `highResolutionDistance + hysteresis + 32` blocks and
+for recently drawn block-atlas item models;
 sections that come into range later are requested as the camera moves, and requests are
 renewed after an atlas rebuild. Requests are based on chunk meshing, not
 camera visibility. Requests now carry the squared distance between the meshed
@@ -254,7 +258,7 @@ stale resource-pack tiles can be invalidated cleanly. Streamed mode releases
 the full-resolution albedo atlas and replaces it with the bounded tile cache
 for near terrain. With Iris, the PBR atlases are reduced as well; without
 Iris there are none, so the saving is the albedo atlas. Other consumers of Minecraft's shared block
-atlas see the low-resolution fallback until resource packs are reloaded.
+atlas, including GUI icons, see the low-resolution fallback until resource packs are reloaded.
 Use `/lods cache` during `/lods preview-distance` to see resident-tile and
 pending-request counts.
 Use `/lods perf start` and hold a steady camera view. The sample stops

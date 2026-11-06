@@ -61,6 +61,7 @@ public final class AtlasPreviewState {
 		new VirtualTextureRequestTracker();
 	private static final ArrayDeque<VirtualTextureRequestTracker.UvQuad> pendingVirtualTextureQuads =
 		new ArrayDeque<>();
+	private static final Set<VirtualTextureRequestTracker.UvQuad> pendingItemQuads = new HashSet<>();
 	private static final VirtualTextureTileRequestQueue pendingVirtualTextureTiles =
 		new VirtualTextureTileRequestQueue(MAX_PENDING_TILE_REQUESTS);
 	private static final Set<VirtualTextureTileKey> animatedVirtualTextureTiles = new HashSet<>();
@@ -86,6 +87,7 @@ public final class AtlasPreviewState {
 	private static int lowAtlasDownscaleFactor = 1;
 	private static volatile long generation;
 	private static VirtualTextureRequestTracker.TileCursor activeVirtualTextureCursor;
+	private static VirtualTextureRequestTracker.UvQuad activeVirtualTextureQuad;
 	private static double activeVirtualTextureDistanceSquared = Double.POSITIVE_INFINITY;
 
 	private AtlasPreviewState() {
@@ -299,9 +301,28 @@ public final class AtlasPreviewState {
 	private static volatile NearAtlas nearAtlas;
 
 	private static boolean guiItemDraw;
+	private static final long ITEM_REQUEST_INTERVAL_NANOS = 1_000_000_000L;
+	private static final int MAX_TRACKED_ITEM_SPRITES = 4096;
+	private static final Map<TextureAtlasSprite, Long> itemSpriteRequests = new java.util.LinkedHashMap<>();
+	private static final Map<String, Long> animatedItemSprites = new HashMap<>();
+	private static long itemSpriteGeneration = Long.MIN_VALUE;
 
 	public static void setGuiItemDraw(boolean value) {
 		guiItemDraw = value;
+	}
+
+	public static boolean useVirtualTextureForItemDraw() {
+		return !guiItemDraw && isDistancePreviewEnabled() && virtualTextureGpuCache != null
+			&& virtualTextureGpuPageTable != null && virtualTextureMetadataTexture != null;
+	}
+
+	public static boolean isReducedBlockAtlasView(GpuTextureView view) {
+		return view != null && view == lowResolutionTextureView;
+	}
+
+	public static long virtualTextureGeneration() {
+		VirtualTextureGpuPageTable pageTable = virtualTextureGpuPageTable;
+		return pageTable == null ? Long.MIN_VALUE : pageTable.layout().atlasGeneration();
 	}
 
 	public static long guiItemAtlasRevision() {
@@ -382,11 +403,35 @@ public final class AtlasPreviewState {
 		return nearRemapPlaceholderView;
 	}
 
-	public static void recordSpriteUsage(net.minecraft.client.renderer.texture.TextureAtlasSprite sprite) {
+	public static synchronized void recordSpriteUsage(net.minecraft.client.renderer.texture.TextureAtlasSprite sprite) {
 		NearAtlas near = nearAtlas;
 		if (near != null && !guiItemDraw && TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
 			near.touch(sprite);
 		}
+		if (!TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation()) || !useVirtualTextureForItemDraw()
+				|| SodiumLodBridge.isIrisShaderPackInUse()) {
+			return;
+		}
+		if (itemSpriteGeneration != generation) {
+			itemSpriteRequests.clear();
+			animatedItemSprites.clear();
+			itemSpriteGeneration = generation;
+		}
+		long now = System.nanoTime();
+		if (sprite.contents().isAnimated()) {
+			animatedItemSprites.put(sprite.contents().name().toString(), now);
+		}
+		Long lastRequest = itemSpriteRequests.get(sprite);
+		if (lastRequest != null && now - lastRequest < ITEM_REQUEST_INTERVAL_NANOS) {
+			return;
+		}
+		if (lastRequest == null && itemSpriteRequests.size() >= MAX_TRACKED_ITEM_SPRITES) {
+			itemSpriteRequests.remove(itemSpriteRequests.keySet().iterator().next());
+		}
+		itemSpriteRequests.put(sprite, now);
+		VIRTUAL_TEXTURE_REQUEST_TRACKER.recordSpriteUsage(
+			sprite.getU0(), sprite.getV0(), sprite.getU1(), sprite.getV1(), generation, 0.0
+		);
 	}
 
 	public static boolean isNearAtlasWarm() {
@@ -620,6 +665,8 @@ public final class AtlasPreviewState {
 	// Updated tiles move to the back of the map so a backlog is worked through fairly.
 	private static void serviceAnimatedTiles(VirtualTextureGpuCache cache, VirtualTextureTileBuilder builder) {
 		uploadPreparedTiles(cache);
+		long now = System.nanoTime();
+		animatedItemSprites.values().removeIf(lastSeen -> now - lastSeen > ITEM_REQUEST_INTERVAL_NANOS * 2);
 		if (animatedTiles.isEmpty()) {
 			return;
 		}
@@ -638,7 +685,8 @@ public final class AtlasPreviewState {
 			}
 			for (int index = 0; index < tile.names().size(); index++) {
 				String name = tile.names().get(index);
-				if (active.contains(name) && !java.util.Objects.equals(spriteFrames.get(name), tile.frames()[index])) {
+				if ((active.contains(name) || animatedItemSprites.containsKey(name))
+						&& !java.util.Objects.equals(spriteFrames.get(name), tile.frames()[index])) {
 					due.add(entry.getKey());
 					break;
 				}
@@ -823,7 +871,13 @@ public final class AtlasPreviewState {
 		long currentGeneration = pageTable.layout().atlasGeneration();
 		for (VirtualTextureRequestTracker.UvQuad quad
 				: VIRTUAL_TEXTURE_REQUEST_TRACKER.drain(MAX_UV_QUADS_PER_TICK, currentGeneration)) {
-			pendingVirtualTextureQuads.addLast(quad);
+			if (quad.distanceSquared() == 0.0) {
+				if (pendingItemQuads.add(quad)) {
+					pendingVirtualTextureQuads.addFirst(quad);
+				}
+			} else {
+				pendingVirtualTextureQuads.addLast(quad);
+			}
 		}
 
 		int plannedKeys = 0;
@@ -838,6 +892,7 @@ public final class AtlasPreviewState {
 					layout,
 					pageTable.layout().mipLevelCount()
 				);
+				activeVirtualTextureQuad = quad;
 				activeVirtualTextureDistanceSquared = quad.distanceSquared();
 			}
 			VirtualTextureTileKey key = activeVirtualTextureCursor.next();
@@ -857,7 +912,9 @@ public final class AtlasPreviewState {
 			}
 			plannedKeys++;
 			if (activeVirtualTextureCursor.isComplete()) {
+				pendingItemQuads.remove(activeVirtualTextureQuad);
 				activeVirtualTextureCursor = null;
+				activeVirtualTextureQuad = null;
 				activeVirtualTextureDistanceSquared = Double.POSITIVE_INFINITY;
 			}
 		}
@@ -2057,12 +2114,14 @@ public final class AtlasPreviewState {
 		}
 		virtualTextureLayout = null;
 		pendingVirtualTextureQuads.clear();
+		pendingItemQuads.clear();
 		pendingVirtualTextureTiles.clear();
 		animatedVirtualTextureTiles.clear();
 		animatedTiles.clear();
 		discardPreparedTiles();
 		spriteFrames.clear();
 		activeVirtualTextureCursor = null;
+		activeVirtualTextureQuad = null;
 		activeVirtualTextureDistanceSquared = Double.POSITIVE_INFINITY;
 		closeVirtualTextureGpuPageTable();
 		closeAnimatedSprites(animatedSprites);
