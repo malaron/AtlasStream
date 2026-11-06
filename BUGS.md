@@ -5,6 +5,22 @@ as a defect. Update entries as evidence is gathered or issues are resolved.
 
 ## Open
 
+### Chest and hopper reflections change abruptly with view
+
+- **Status:** Unconfirmed; deferred pending a comparison without the mod.
+- **Observed:** With Kappa and Photon, chest and hopper surfaces visibly change
+  while approaching; one repeatable transition was around 6-7 blocks away.
+  Nearby terrain and a crafter did not visibly change, and the effect was not
+  observed with shaders off.
+- **Diagnostic evidence:** With Kappa, the change disappeared when reflections
+  were disabled. With reflections restored, it could also be reproduced by
+  turning the camera while standing still. This suggests a view-dependent
+  reflection effect, but does not establish whether the mod is responsible.
+- **Next investigation:** Compare the same reflection behavior without the
+  mod using a resource pack that can load within the GPU's atlas size limit.
+  If it occurs only with the mod, investigate the relevant shader and material
+  rendering paths.
+
 ### Occasional delayed texture sharpening after rapid movement
 
 - **Status:** Deferred; monitor for recurrence.
