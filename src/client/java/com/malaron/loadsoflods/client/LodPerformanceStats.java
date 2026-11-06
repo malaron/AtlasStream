@@ -18,6 +18,8 @@ public final class LodPerformanceStats {
 	private static long animationBlendNanos;
 	private static long animationBlendRequests;
 	private static long animationBlendBuilds;
+	private static long nearRefreshNanos;
+	private static long nearRefreshCalls;
 
 	static {
 		for (SectionLod lod : SectionLod.values()) {
@@ -37,6 +39,8 @@ public final class LodPerformanceStats {
 		animationBlendNanos = 0;
 		animationBlendRequests = 0;
 		animationBlendBuilds = 0;
+		nearRefreshNanos = 0;
+		nearRefreshCalls = 0;
 		sampleStartNanos = System.nanoTime();
 		recording = true;
 	}
@@ -104,6 +108,13 @@ public final class LodPerformanceStats {
 		}
 	}
 
+	public static synchronized void recordNearRefresh(long elapsedNanos) {
+		if (recording) {
+			nearRefreshNanos += elapsedNanos;
+			nearRefreshCalls++;
+		}
+	}
+
 	public static synchronized List<String> stopAndFormat() {
 		if (!recording) {
 			return List.of();
@@ -138,6 +149,12 @@ public final class LodPerformanceStats {
 			animationBlendRequests,
 			animationBlendBuilds,
 			animationBlendRequests - animationBlendBuilds
+		));
+		lines.add(String.format(
+			Locale.ROOT,
+			"Near-atlas refresh: %.1f ms/%d calls",
+			toMilliseconds(nearRefreshNanos),
+			nearRefreshCalls
 		));
 		lines.add("CPU timings only; they exclude GPU execution and other world-render work.");
 		return List.copyOf(lines);

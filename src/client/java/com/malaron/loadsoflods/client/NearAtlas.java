@@ -478,8 +478,8 @@ final class NearAtlas implements AutoCloseable {
 		cameraZ = camera.z;
 
 		Set<TextureAtlasSprite> active = new java.util.HashSet<>();
-		Set<TextureAtlasSprite> needed = new java.util.HashSet<>();
-		java.util.Map<TextureAtlasSprite, Double> distances = new java.util.HashMap<>();
+		var demand = new com.malaron.loadsoflods.cache.NearestSpriteDemand<TextureAtlasSprite>();
+		Set<TextureAtlasSprite> needed = demand.sprites();
 		if (radius > 0.0) {
 			var forward = cameraEntity.forwardVector();
 			double drawReach = radius + config.hysteresis();
@@ -498,10 +498,9 @@ final class NearAtlas implements AutoCloseable {
 				if (distance - SECTION_RADIUS > reach) {
 					continue;
 				}
-				needed.addAll(entry.getValue());
 				double nearest = Math.max(0.0, distance - SECTION_RADIUS);
 				for (TextureAtlasSprite sprite : entry.getValue()) {
-					distances.merge(sprite, nearest, Math::min);
+					demand.record(sprite, nearest);
 				}
 				if (distance - SECTION_RADIUS > drawReach) {
 					continue;
@@ -531,8 +530,7 @@ final class NearAtlas implements AutoCloseable {
 			if (age > TOUCH_FORGET_NANOS) {
 				touched.remove();
 			} else if (age <= TOUCH_RECENT_NANOS) {
-				needed.add(entry.getKey());
-				distances.put(entry.getKey(), 0.0);
+				demand.record(entry.getKey(), 0.0);
 				if (entry.getKey().contents().isAnimated()) {
 					active.add(entry.getKey());
 				}
@@ -552,7 +550,7 @@ final class NearAtlas implements AutoCloseable {
 			}
 		}
 		activeSprites = active;
-		spriteDistance = distances;
+		spriteDistance = demand.distances();
 		if (!waitingForSlot.isEmpty() && radius > 0.0) {
 			evictForWaitingSprites(needed, now);
 		}
@@ -776,7 +774,12 @@ final class NearAtlas implements AutoCloseable {
 		}
 		if (activeRefreshTicks-- <= 0) {
 			activeRefreshTicks = waitingForSlot.isEmpty() ? 3 : 1;
+			boolean recording = LodPerformanceStats.isRecording();
+			long start = recording ? System.nanoTime() : 0;
 			refreshSprites();
+			if (recording) {
+				LodPerformanceStats.recordNearRefresh(System.nanoTime() - start);
+			}
 		}
 		// Until the first sprites around the camera are resident the near terrain is drawn from the reduced atlas,
 		// so catch up faster than the steady-state limits allow.
