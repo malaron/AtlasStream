@@ -6,6 +6,7 @@
 		"AbstractTextureAccessor",
 		"AbstractTexturePreviewMixin",
 		"ChunkVertexConsumerMixin",
+		"FirstPersonItemSpriteMixin",
 		"GuiItemAtlasMixin",
 		"GuiPictureItemMixin",
 		"GuiRendererItemCacheMixin",

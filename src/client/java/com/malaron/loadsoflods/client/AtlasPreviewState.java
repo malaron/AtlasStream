@@ -325,6 +325,46 @@ public final class AtlasPreviewState {
 		return pageTable == null ? Long.MIN_VALUE : pageTable.layout().atlasGeneration();
 	}
 
+	public static synchronized String describeItemSpriteResidency(TextureAtlasSprite sprite) {
+		String label = sprite.contents().name() + " (" + sprite.atlasLocation() + ")";
+		VirtualTextureGpuPageTable pageTable = virtualTextureGpuPageTable;
+		VirtualTextureGpuCache cache = virtualTextureGpuCache;
+		VirtualTextureLayout layout = virtualTextureLayout;
+		if (!TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())
+				|| pageTable == null || cache == null || layout == null) {
+			return label + ": not using the block tile cache";
+		}
+		int levels = Math.min(pageTable.layout().mipLevelCount(),
+			Integer.numberOfTrailingZeros(Math.max(1, lowAtlasDownscaleFactor)));
+		if (levels == 0) {
+			return label + ": no streamed mip levels";
+		}
+		int[] resident = new int[levels];
+		int[] total = new int[levels];
+		var quad = new VirtualTextureRequestTracker.UvQuad(
+			sprite.getU0(), sprite.getV0(), sprite.getU1(), sprite.getV1(),
+			pageTable.layout().atlasGeneration(), 0.0
+		);
+		var cursor = VirtualTextureRequestTracker.cursor(quad, layout, levels);
+		int examined = 0;
+		while (!cursor.isComplete() && examined < 16384) {
+			var key = cursor.next();
+			total[key.mipLevel()]++;
+			if (cache.isResident(key)) {
+				resident[key.mipLevel()]++;
+			}
+			examined++;
+		}
+		StringBuilder result = new StringBuilder(label).append(": resident tiles");
+		for (int level = 0; level < levels; level++) {
+			result.append(" mip").append(level).append('=').append(resident[level]).append('/').append(total[level]);
+		}
+		if (!cursor.isComplete()) {
+			result.append(" (truncated)");
+		}
+		return result.toString();
+	}
+
 	public static long guiItemAtlasRevision() {
 		return guiItemAtlasRevision;
 	}

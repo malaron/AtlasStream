@@ -52,6 +52,11 @@ public final class AtlasBuildCommand {
 							.executes(context -> reportVirtualTextureCache(context.getSource()))
 					)
 					.then(
+						literal("item-debug")
+							.requires(net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource::attended)
+							.executes(context -> reportItemStreaming(context.getSource()))
+					)
+					.then(
 						literal("vram")
 							.requires(net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource::attended)
 							.executes(context -> reportVram(context.getSource()))
@@ -111,6 +116,7 @@ public final class AtlasBuildCommand {
 			source.sendError(Component.literal("The virtual texture cache is not initialized. Run /lods preview-distance first."));
 			return 0;
 		}
+
 		source.sendFeedback(
 			Component.literal(
 				"Virtual texture cache: " + status.residentTiles() + " resident tiles, "
@@ -121,6 +127,16 @@ public final class AtlasBuildCommand {
 					+ status.capturedSpriteUses() + " Sodium sprite-use events captured."
 			)
 		);
+		return 1;
+	}
+
+	private static int reportItemStreaming(
+		net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource source
+	) {
+		for (String line : ItemStreamDiagnostics.report()) {
+			source.sendFeedback(Component.literal(line));
+			LoadsOfLods.LOGGER.info("Item streaming: {}", line);
+		}
 		return 1;
 	}
 

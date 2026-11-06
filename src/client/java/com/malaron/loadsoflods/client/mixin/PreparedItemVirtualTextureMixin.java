@@ -2,6 +2,7 @@ package com.malaron.loadsoflods.client.mixin;
 
 import com.malaron.loadsoflods.LoadsOfLods;
 import com.malaron.loadsoflods.client.AtlasPreviewState;
+import com.malaron.loadsoflods.client.ItemStreamDiagnostics;
 import com.malaron.loadsoflods.client.SodiumLodBridge;
 import com.malaron.loadsoflods.client.VirtualItemPipeline;
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -38,12 +39,16 @@ public abstract class PreparedItemVirtualTextureMixin {
 	)
 	private CompiledRenderPipeline loadsOfLods$selectItemPipeline(RenderPipeline pipeline) {
 		loadsOfLods$virtualItem = false;
+		boolean itemShader = name().startsWith("item_")
+			&& Identifier.withDefaultNamespace("core/item").equals(pipeline.getShaders().get(ShaderType.FRAGMENT));
+		boolean blockAtlas = textures().stream().anyMatch(texture -> texture.name().equals("Sampler0")
+			&& AtlasPreviewState.isReducedBlockAtlasView(texture.textureView()));
 		if (!AtlasPreviewState.useVirtualTextureForItemDraw()
 				|| SodiumLodBridge.isIrisShaderPackInUse()
-				|| !name().startsWith("item_")
-				|| !Identifier.withDefaultNamespace("core/item").equals(pipeline.getShaders().get(ShaderType.FRAGMENT))
-				|| textures().stream().noneMatch(texture -> texture.name().equals("Sampler0")
-					&& AtlasPreviewState.isReducedBlockAtlasView(texture.textureView()))) {
+				|| !itemShader || !blockAtlas) {
+			if (itemShader) {
+				ItemStreamDiagnostics.recordDraw(name() + (blockAtlas ? " reduced" : " other-atlas"));
+			}
 			return RenderSystem.getCompiledPipeline(pipeline);
 		}
 		long generation = AtlasPreviewState.virtualTextureGeneration();
@@ -52,15 +57,18 @@ public abstract class PreparedItemVirtualTextureMixin {
 			loadsOfLods$failedPipelines.clear();
 		}
 		if (loadsOfLods$failedPipelines.contains(pipeline)) {
+			ItemStreamDiagnostics.recordDraw(name() + " compile-failed");
 			return RenderSystem.getCompiledPipeline(pipeline);
 		}
 		CompiledRenderPipeline compiled = RenderSystem.getCompiledPipelineNullable(VirtualItemPipeline.forPipeline(pipeline));
 		if (compiled == null) {
 			loadsOfLods$failedPipelines.add(pipeline);
 			LoadsOfLods.LOGGER.error("Could not compile virtual block-item pipeline {}; using reduced atlas", pipeline);
+			ItemStreamDiagnostics.recordDraw(name() + " compile-failed");
 			return RenderSystem.getCompiledPipeline(pipeline);
 		}
 		loadsOfLods$virtualItem = true;
+		ItemStreamDiagnostics.recordDraw(name() + " virtual");
 		return compiled;
 	}
 

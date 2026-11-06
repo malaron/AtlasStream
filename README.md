@@ -261,6 +261,10 @@ Iris there are none, so the saving is the albedo atlas. Other consumers of Minec
 atlas, including GUI icons, see the low-resolution fallback until resource packs are reloaded.
 Use `/lods cache` during `/lods preview-distance` to see resident-tile and
 pending-request counts.
+To diagnose a low-resolution held item, hold it with shaders off and use
+`/lods item-debug`. The report lists recently drawn first-person sprites,
+their block-cache tile residency by mip level, and recent item draw paths;
+it is also written to the game log.
 Use `/lods perf start` and hold a steady camera view. The sample stops
 automatically after 30 seconds and reports CPU time spent building both
 filtered section lists, preparing Sodium batches, and submitting the split draws. Sections are
