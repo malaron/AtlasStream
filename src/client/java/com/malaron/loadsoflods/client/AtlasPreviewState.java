@@ -291,6 +291,9 @@ public final class AtlasPreviewState {
 			return residentLayer;
 		}
 		int slot = uploadTileImages(cache, tileBuilder, key, false);
+		if (slot < 0) {
+			throw new IllegalStateException("Virtual texture cache has no lower-priority tile to replace");
+		}
 		AnimatedTile animated = snapshotAnimatedTile(tileBuilder, key);
 		if (!animated.names().isEmpty()) {
 			animatedTiles.put(key, animated);
@@ -334,6 +337,7 @@ public final class AtlasPreviewState {
 				|| pageTable == null || cache == null || layout == null) {
 			return label + ": not using the block tile cache";
 		}
+
 		int levels = Math.min(pageTable.layout().mipLevelCount(),
 			Integer.numberOfTrailingZeros(Math.max(1, lowAtlasDownscaleFactor)));
 		if (levels == 0) {
@@ -363,6 +367,19 @@ public final class AtlasPreviewState {
 			result.append(" (truncated)");
 		}
 		return result.toString();
+	}
+
+	public static synchronized String describeVirtualTextureActivity() {
+		VirtualTextureGpuCache cache = virtualTextureGpuCache;
+		if (cache == null) {
+			return "Virtual texture cache unavailable";
+		}
+		return "cache=" + cache.size() + " tiles, " + cache.usedBytes() / 1024 + "/"
+			+ cache.capacityBytes() / 1024 + " KiB, evictions=" + cache.evictionCount()
+			+ ", pending tiles=" + pendingVirtualTextureTiles.size()
+			+ ", loading=" + loadingTiles.size()
+			+ ", pending quads=" + (VIRTUAL_TEXTURE_REQUEST_TRACKER.pendingCount() + pendingVirtualTextureQuads.size())
+			+ ", refresh counter=" + streamRerequestCounter;
 	}
 
 	public static long guiItemAtlasRevision() {
@@ -576,17 +593,19 @@ public final class AtlasPreviewState {
 			virtualTextureGpuPageTable.layout().mipLevelCount()
 		);
 		while (loadingTiles.size() < MAX_TILES_LOADING) {
-			VirtualTextureTileKey key = pendingVirtualTextureTiles.poll();
-			if (key == null) {
+			var request = pendingVirtualTextureTiles.pollRequest();
+			if (request == null) {
 				return;
 			}
-			if (cache.get(key) != null || loadingTiles.containsKey(key)) {
+			VirtualTextureTileKey key = request.key();
+			if (cache.noteDemand(key, request.distanceSquared()) || loadingTiles.containsKey(key)
+					|| !cache.canAdmit(key, request.distanceSquared())) {
 				continue;
 			}
 			AnimatedTile snapshot = snapshotAnimatedTile(builder, key);
 			loadingTiles.put(key, new PreparedTile(snapshot, animatedTileExecutor.submit(
 				() -> buildTileImages(builder, key, cacheMipLevels)
-			)));
+			), request.distanceSquared()));
 		}
 	}
 
@@ -631,8 +650,8 @@ public final class AtlasPreviewState {
 			List<NativeImage> images = null;
 			try {
 				images = entry.getValue().images().get();
-				if (cache.get(entry.getKey()) == null) {
-					cache.upload(entry.getKey(), images);
+				if (!cache.noteDemand(entry.getKey(), entry.getValue().distanceSquared())
+						&& cache.upload(entry.getKey(), images, entry.getValue().distanceSquared()) >= 0) {
 					if (!entry.getValue().snapshot().names().isEmpty()) {
 						animatedTiles.put(entry.getKey(), entry.getValue().snapshot());
 					}
@@ -651,7 +670,12 @@ public final class AtlasPreviewState {
 	private record AnimatedTile(List<String> names, FrameState[] frames) {
 	}
 
-	private record PreparedTile(AnimatedTile snapshot, java.util.concurrent.Future<List<NativeImage>> images) {
+	private record PreparedTile(
+		AnimatedTile snapshot, java.util.concurrent.Future<List<NativeImage>> images, double distanceSquared
+	) {
+		private PreparedTile(AnimatedTile snapshot, java.util.concurrent.Future<List<NativeImage>> images) {
+			this(snapshot, images, Double.POSITIVE_INFINITY);
+		}
 	}
 
 	private static void discardPreparedTiles() {
@@ -826,6 +850,7 @@ public final class AtlasPreviewState {
 		// are still resident are skipped when the request is planned.
 		if (++streamRerequestCounter >= STREAM_REREQUEST_REFRESHES) {
 			streamRerequestCounter = 0;
+			virtualTextureGpuCache.nextDemandEpoch();
 			requestedStreamSections.clear();
 		}
 		if (streamGeneration != generation) {
@@ -945,8 +970,15 @@ public final class AtlasPreviewState {
 			if (wanted && !animatedVirtualTextureTiles.contains(key)) {
 				VirtualTextureGpuCache cache = virtualTextureGpuCache;
 				if (cache != null) {
-					if (cache.get(key) == null) {
-						pendingVirtualTextureTiles.offer(key, activeVirtualTextureDistanceSquared);
+					if (!cache.noteDemand(key, activeVirtualTextureDistanceSquared)) {
+						PreparedTile loading = loadingTiles.get(key);
+						if (loading != null && activeVirtualTextureDistanceSquared < loading.distanceSquared()) {
+							loadingTiles.put(key, new PreparedTile(
+								loading.snapshot(), loading.images(), activeVirtualTextureDistanceSquared
+							));
+						} else if (loading == null && cache.canAdmit(key, activeVirtualTextureDistanceSquared)) {
+							pendingVirtualTextureTiles.offer(key, activeVirtualTextureDistanceSquared);
+						}
 					}
 				}
 			}
@@ -969,6 +1001,7 @@ public final class AtlasPreviewState {
 		if (animatedCache != null) {
 			serviceAnimatedTiles(animatedCache, virtualTextureTileBuilder);
 		}
+		ItemStreamDiagnostics.sampleCacheActivity();
 	}
 
 	public static synchronized VirtualTextureCacheStatus virtualTextureCacheStatus() {

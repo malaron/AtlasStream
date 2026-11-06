@@ -6,6 +6,7 @@ import java.util.Queue;
 
 import com.malaron.loadsoflods.cache.ByteLruCache;
 import com.malaron.loadsoflods.cache.VirtualTextureTileKey;
+import com.malaron.loadsoflods.cache.VirtualTextureResidencyPriority;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.GpuFormat;
@@ -22,10 +23,12 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 	private GpuTextureView textureView;
 	private final Queue<Integer> freeSlots = new ArrayDeque<>();
 	private final ByteLruCache<VirtualTextureTileKey, ResidentTile> residentTiles;
+	private final VirtualTextureResidencyPriority priority = new VirtualTextureResidencyPriority();
 	private final long bytesPerTile;
 	private final long capacityBytes;
 	private boolean closed;
 	private boolean closing;
+	private long evictionCount;
 
 	public VirtualTextureGpuCache(
 		VirtualTextureGpuPageTable pageTable,
@@ -99,6 +102,10 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 	}
 
 	public synchronized int upload(VirtualTextureTileKey key, List<NativeImage> mipLevels) {
+		return upload(key, mipLevels, Double.POSITIVE_INFINITY);
+	}
+
+	public synchronized int upload(VirtualTextureTileKey key, List<NativeImage> mipLevels, double distanceSquared) {
 		ensureOpen();
 		ResidentTile existing = residentTiles.get(key);
 		if (existing != null) {
@@ -116,8 +123,12 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 			throw new IllegalArgumentException("Virtual texture tile exceeds the configured cache budget");
 		}
 		while (freeSlots.isEmpty()) {
-			if (!residentTiles.evictLeastRecentlyUsed()) {
-				throw new IllegalStateException("Virtual texture cache has no free tile slot to evict");
+			VirtualTextureTileKey victim = priority.victimFor(key, distanceSquared);
+			if (victim == null) {
+				return -1;
+			}
+			if (!residentTiles.invalidate(victim)) {
+				throw new IllegalStateException("Virtual texture priority index is inconsistent");
 			}
 		}
 		int slot = freeSlots.remove();
@@ -140,6 +151,7 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 			encoder.submit();
 			pageTable.setResident(key, slot);
 			residentTiles.put(key, new ResidentTile(key, slot), weight);
+			priority.record(key, distanceSquared);
 			uploaded = true;
 			return slot;
 		} finally {
@@ -182,6 +194,25 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 		return residentTiles.containsKey(key);
 	}
 
+	public synchronized boolean noteDemand(VirtualTextureTileKey key, double distanceSquared) {
+		ensureOpen();
+		if (!residentTiles.containsKey(key)) {
+			return false;
+		}
+		priority.record(key, distanceSquared);
+		return true;
+	}
+
+	public synchronized boolean canAdmit(VirtualTextureTileKey key, double distanceSquared) {
+		ensureOpen();
+		return !freeSlots.isEmpty() || priority.victimFor(key, distanceSquared) != null;
+	}
+
+	public synchronized void nextDemandEpoch() {
+		ensureOpen();
+		priority.nextEpoch();
+	}
+
 	public synchronized GpuTextureView textureView() {
 		ensureOpen();
 		return textureView;
@@ -201,6 +232,10 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 
 	public synchronized int size() {
 		return residentTiles.size();
+	}
+
+	public synchronized long evictionCount() {
+		return evictionCount;
 	}
 
 	@Override
@@ -250,6 +285,8 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 		if (closing) {
 			return;
 		}
+		evictionCount++;
+		priority.remove(tile.key());
 		pageTable.clear(tile.key());
 		freeSlots.add(tile.slot());
 	}

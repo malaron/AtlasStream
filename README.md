@@ -192,7 +192,10 @@ seams between adjacent portal blocks after downscaling.
 The byte-bounded LRU eviction primitive and CPU-side virtual-UV-to-tile address
 model are unit-tested. The GPU page-table texture and bounded 2D tile-atlas
 cache upload mip-complete tiles, update residency entries, and clear entries
-on LRU eviction. This uses a 2D texture because Minecraft's current RenderPearl
+on eviction. When the cache is full, nearer requests take priority over farther
+resident tiles; equal-priority requests do not repeatedly evict one another.
+Demand is refreshed periodically so tiles no longer nearby can be replaced.
+This uses a 2D texture because Minecraft's current RenderPearl
 backend does not support texture arrays. Tiles are composed from Minecraft's
 stitched sprite mipmaps. Tiles touching animated sprites are drawn from the
 sprite's current full-resolution frame and rewritten in place when it changes,
@@ -236,9 +239,9 @@ Sodium's resolved chunk-mesh sprite usage is collected into bounded UV requests 
 incrementally into tile requests; tile construction and upload are throttled
 during the client tick, outside the terrain render pass where GPU texture
 commands are prohibited. The service plans up to 512 tile keys and processes up
-to four tile uploads per tick, stopping after roughly 4 ms of tile work once at
-least one tile has been attempted. Already-resident tiles are skipped when
-planning and again before upload; resident requests refresh LRU recency. The
+to 32 new tile uploads per tick, stopping after roughly 4 ms once at least one
+upload has completed. Already-resident tiles are skipped when planning and again
+before upload; resident requests refresh their distance priority. The
 bounded pending queue prioritizes finer
 atlas mip levels, deduplicates keys, and evicts coarse requests first when full.
 Enabling distance preview schedules loaded Sodium
@@ -264,7 +267,8 @@ pending-request counts.
 To diagnose a low-resolution held item, hold it with shaders off and use
 `/lods item-debug`. The report lists recently drawn first-person sprites,
 their block-cache tile residency by mip level, and recent item draw paths;
-it is also written to the game log.
+it is also written to the game log. The command monitors those sprites and
+cache evictions for 30 seconds to help diagnose intermittent fallback.
 Use `/lods perf start` and hold a steady camera view. The sample stops
 automatically after 30 seconds and reports CPU time spent building both
 filtered section lists, preparing Sodium batches, and submitting the split draws. Sections are

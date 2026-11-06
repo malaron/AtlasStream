@@ -54,6 +54,11 @@ public final class VirtualTextureTileRequestQueue {
 	}
 
 	public VirtualTextureTileKey poll() {
+		Request request = pollRequest();
+		return request == null ? null : request.key();
+	}
+
+	public Request pollRequest() {
 		Map.Entry<RequestPriority, ArrayDeque<VirtualTextureTileKey>> highestPriority =
 			requestsByPriority.firstEntry();
 		if (highestPriority == null) {
@@ -64,7 +69,10 @@ public final class VirtualTextureTileRequestQueue {
 		if (highestPriority.getValue().isEmpty()) {
 			requestsByPriority.remove(highestPriority.getKey());
 		}
-		return key;
+		return new Request(key, highestPriority.getKey().distanceSquared());
+	}
+
+	public record Request(VirtualTextureTileKey key, double distanceSquared) {
 	}
 
 	public boolean contains(VirtualTextureTileKey key) {

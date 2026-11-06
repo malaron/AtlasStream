@@ -83,6 +83,15 @@ class VirtualTextureTileRequestQueueTest {
 		assertEquals(other, queue.poll());
 	}
 
+	@Test
+	void polledRequestPreservesItsUpgradedDistance() {
+		var queue = new VirtualTextureTileRequestQueue(2);
+		var key = key(0, 0);
+		queue.offer(key, 400);
+		queue.offer(key, 25);
+		assertEquals(new VirtualTextureTileRequestQueue.Request(key, 25), queue.pollRequest());
+	}
+
 	private static VirtualTextureTileKey key(int mipLevel, int tileX) {
 		return new VirtualTextureTileKey(1, mipLevel, tileX, 0);
 	}
