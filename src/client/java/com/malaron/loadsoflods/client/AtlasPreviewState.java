@@ -56,7 +56,6 @@ public final class AtlasPreviewState {
 	private static final int MAX_TILE_KEYS_PER_TICK = 512;
 	private static final int MAX_TILE_UPLOADS_PER_TICK = 4;
 	private static final long MAX_TILE_UPLOAD_TIME_NANOS_PER_TICK = 4_000_000L;
-	private static final boolean DIAGNOSTIC_LOW_NON_TERRAIN = Boolean.getBoolean("loadsoflods.diagnosticLowNonTerrain");
 	private static final AtomicBoolean BUILDING = new AtomicBoolean();
 	private static final VirtualTextureRequestTracker VIRTUAL_TEXTURE_REQUEST_TRACKER =
 		new VirtualTextureRequestTracker();
@@ -329,7 +328,6 @@ public final class AtlasPreviewState {
 
 	private static boolean slotUsesNearAtlas(NearAtlas near, Object atlas) {
 		return (!near.isCompact() || vanillaRemapAvailable)
-			&& !(near.isCompact() && DIAGNOSTIC_LOW_NON_TERRAIN)
 			&& !guiItemDraw
 			&& atlas == previewedAtlas
 			&& near.isUsable()

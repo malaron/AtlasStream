@@ -80,11 +80,6 @@ the compact atlas is smaller than the view needs. To test this, launch with
 `-Dloadsoflods.compactSize=8192` (texels, default 16384) and watch the F3
 "Near sparse atlas" line and the `Slot pressure:` debug log lines.
 
-For diagnosing non-terrain rendering, `-Dloadsoflods.diagnosticLowNonTerrain=true`
-temporarily routes non-terrain block-atlas draws through the reduced atlas in
-compact mode. This is a diagnostic only: held and dropped blocks may appear
-lower-resolution. Remove the flag after testing.
-
 ### Reduced-atlas disk cache
 
 Building the reduced atlas (and its PBR maps) takes tens of seconds for large
