@@ -66,6 +66,7 @@ public final class AtlasPreviewState {
 	private static final Set<VirtualTextureTileKey> animatedVirtualTextureTiles = new HashSet<>();
 	private static volatile boolean lowPreviewEnabled;
 	private static volatile boolean distancePreviewEnabled;
+	private static volatile long guiItemAtlasRevision;
 	private static volatile TextureAtlas previewedAtlas;
 	private static volatile List<Object> reducedPbrAtlases = List.of();
 	private static volatile GpuTexture lowResolutionTexture;
@@ -184,6 +185,7 @@ public final class AtlasPreviewState {
 				previewedAtlas = atlas;
 				lowPreviewEnabled = !enableDistancePreview;
 				distancePreviewEnabled = enableDistancePreview;
+				guiItemAtlasRevision++;
 				if (enableDistancePreview) {
 					SodiumLodBridge.scheduleVisibleTerrainRebuild();
 				}
@@ -300,6 +302,10 @@ public final class AtlasPreviewState {
 
 	public static void setGuiItemDraw(boolean value) {
 		guiItemDraw = value;
+	}
+
+	public static long guiItemAtlasRevision() {
+		return guiItemAtlasRevision;
 	}
 
 	private static volatile boolean vanillaRemapAvailable;

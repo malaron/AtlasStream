@@ -28,7 +28,9 @@ resident high-resolution tiles, and distant sections use the reduced atlas;
 the full high-resolution block-atlas GPU allocation is released. Because
 Minecraft shares this atlas with other block-atlas users, they also see the
 low-resolution fallback in this mode. A resource reload restores the
-full-resolution atlas. With an Iris shaderpack active, the reduced atlas (albedo
+full-resolution atlas. Cached inventory item images are refreshed when the
+reduced atlas becomes ready, so temporary placeholder colors do not persist.
+With an Iris shaderpack active, the reduced atlas (albedo
 plus normal/specular LabPBR maps, averaged per channel to the same ratio) serves
 distant terrain, and a separate full-size *sparse* "near atlas" (needs
 `GL_ARB_sparse_texture`) serves nearby terrain, held items, entities and
