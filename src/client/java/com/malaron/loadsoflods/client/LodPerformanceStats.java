@@ -15,6 +15,9 @@ public final class LodPerformanceStats {
 	private static long sampleStartNanos;
 	private static long filterNanos;
 	private static long filterCalls;
+	private static long animationBlendNanos;
+	private static long animationBlendRequests;
+	private static long animationBlendBuilds;
 
 	static {
 		for (SectionLod lod : SectionLod.values()) {
@@ -31,6 +34,9 @@ public final class LodPerformanceStats {
 		}
 		filterNanos = 0;
 		filterCalls = 0;
+		animationBlendNanos = 0;
+		animationBlendRequests = 0;
+		animationBlendBuilds = 0;
 		sampleStartNanos = System.nanoTime();
 		recording = true;
 	}
@@ -85,6 +91,19 @@ public final class LodPerformanceStats {
 		}
 	}
 
+	public static synchronized void recordAnimationBlend(long elapsedNanos) {
+		if (recording) {
+			animationBlendNanos += elapsedNanos;
+			animationBlendRequests++;
+		}
+	}
+
+	public static synchronized void recordAnimationBlendBuild() {
+		if (recording) {
+			animationBlendBuilds++;
+		}
+	}
+
 	public static synchronized List<String> stopAndFormat() {
 		if (!recording) {
 			return List.of();
@@ -112,6 +131,14 @@ public final class LodPerformanceStats {
 				metrics.drawCalls
 			));
 		}
+		lines.add(String.format(
+			Locale.ROOT,
+			"Low-atlas animation blends: %.1f ms/%d requests; %d built, %d reused",
+			toMilliseconds(animationBlendNanos),
+			animationBlendRequests,
+			animationBlendBuilds,
+			animationBlendRequests - animationBlendBuilds
+		));
 		lines.add("CPU timings only; they exclude GPU execution and other world-render work.");
 		return List.copyOf(lines);
 	}

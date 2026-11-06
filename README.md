@@ -188,7 +188,10 @@ injected declarations through its compilation pipeline.
 Streamed mode releases the full-resolution albedo atlas.
 Animated albedo sprites follow
 Minecraft's frame sequence and interpolation state; animation frame caches
-share the 1 GiB CPU image safety limit. The repeating Nether portal sprite's
+share the CPU image safety limit. Previously blended low-atlas animation frames
+are reused in a separate cache of up to 32 MiB of CPU memory, cleared on atlas
+reload. `/lods perf start` reports how many blends were built or reused during
+its CPU sample. The repeating Nether portal sprite's
 opposite edges are matched at each low-atlas mip level to reduce visible
 seams between adjacent portal blocks after downscaling.
 The byte-bounded LRU eviction primitive and CPU-side virtual-UV-to-tile address

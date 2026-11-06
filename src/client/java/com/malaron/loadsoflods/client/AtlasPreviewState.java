@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import javax.imageio.ImageIO;
 
 import com.malaron.loadsoflods.LoadsOfLods;
+import com.malaron.loadsoflods.cache.AnimationBlendCache;
 import com.malaron.loadsoflods.cache.VirtualTextureTileBuilder;
 import com.malaron.loadsoflods.cache.VirtualTextureTileBuilder.MipImage;
 import com.malaron.loadsoflods.cache.VirtualTextureTileBuilder.SpriteSource;
@@ -49,6 +50,9 @@ import net.minecraft.server.packs.resources.ResourceManager;
 public final class AtlasPreviewState {
 	private static final int VIRTUAL_TILE_SIZE = 128;
 	private static final long MAX_PREVIEW_BYTES = 2048L * 1024 * 1024;
+	private static final long MAX_ANIMATION_BLEND_CACHE_BYTES = 32L * 1024 * 1024;
+	private static final AnimationBlendCache<AnimationBlendKey, List<NativeImage>> animationBlendCache =
+		new AnimationBlendCache<>(MAX_ANIMATION_BLEND_CACHE_BYTES, AtlasPreviewState::closeImages);
 	private static final int MAX_PENDING_TILE_REQUESTS = 8192;
 	private static final int MAX_UV_QUADS_PER_TICK = 128;
 	private static int animatedTileFailuresLogged;
@@ -2008,9 +2012,8 @@ public final class AtlasPreviewState {
 			animationsById.put(animation.region().identifier(), animation);
 		}
 		List<PendingAnimationUpdate> updates = new ArrayList<>();
-		List<NativeImage> temporaryImages = new ArrayList<>();
 		int stateIndex = 0;
-		try {
+		try (var blends = animationBlendCache.beginBatch()) {
 			for (TextureAtlasSprite sprite : atlasAccessor.loadsOfLods$getSprites()) {
 				if (!sprite.isAnimated()) {
 					continue;
@@ -2074,8 +2077,27 @@ public final class AtlasPreviewState {
 						continue;
 					}
 					float blendWeight = Math.min(1.0F, subFrame / (float) step.duration());
-					frameImages = blendMipLevels(frameImages, nextImages, blendWeight);
-					temporaryImages.addAll(frameImages);
+					List<NativeImage> currentImages = frameImages;
+					long blendBytes = 0;
+					for (NativeImage image : currentImages) {
+						blendBytes += (long) image.getWidth() * image.getHeight() * 4;
+					}
+					AnimationBlendKey key = new AnimationBlendKey(
+						animation, step.frameIndex(), nextFrameIndex, Float.floatToIntBits(blendWeight)
+					);
+					boolean recording = LodPerformanceStats.isRecording();
+					long blendStart = recording ? System.nanoTime() : 0;
+					frameImages = blends.getOrCreate(
+						key, blendBytes, () -> {
+							if (recording) {
+								LodPerformanceStats.recordAnimationBlendBuild();
+							}
+							return blendMipLevels(currentImages, nextImages, blendWeight);
+						}
+					);
+					if (recording) {
+						LodPerformanceStats.recordAnimationBlend(System.nanoTime() - blendStart);
+					}
 				}
 				updates.add(new PendingAnimationUpdate(animation, frameImages, framePosition, subFrame));
 			}
@@ -2104,12 +2126,11 @@ public final class AtlasPreviewState {
 				}
 			}
 			encoder.submit();
+			blends.commit();
 			for (PendingAnimationUpdate update : updates) {
 				update.animation().lastFramePosition = update.framePosition();
 				update.animation().lastSubFrame = update.subFrame();
 			}
-		} finally {
-			closeImages(temporaryImages);
 		}
 	}
 
@@ -2202,6 +2223,7 @@ public final class AtlasPreviewState {
 		activeVirtualTextureCursor = null;
 		activeVirtualTextureDistanceSquared = Double.POSITIVE_INFINITY;
 		closeVirtualTextureGpuPageTable();
+		animationBlendCache.clear();
 		closeAnimatedSprites(animatedSprites);
 		animatedSprites = List.of();
 		lowAtlasDownscaleFactor = 1;
@@ -2840,6 +2862,9 @@ public final class AtlasPreviewState {
 	}
 
 	private record AnimationStep(int frameIndex, int duration) {
+	}
+
+	private record AnimationBlendKey(AnimatedSpriteData animation, int currentFrame, int nextFrame, int weightBits) {
 	}
 
 	private static final class AnimatedSpriteData {
