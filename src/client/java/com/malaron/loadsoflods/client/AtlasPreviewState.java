@@ -4,7 +4,6 @@ import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -59,9 +58,7 @@ public final class AtlasPreviewState {
 	private static final AtomicBoolean BUILDING = new AtomicBoolean();
 	private static final VirtualTextureRequestTracker VIRTUAL_TEXTURE_REQUEST_TRACKER =
 		new VirtualTextureRequestTracker();
-	private static final ArrayDeque<VirtualTextureRequestTracker.UvQuad> pendingVirtualTextureQuads =
-		new ArrayDeque<>();
-	private static final Set<VirtualTextureRequestTracker.UvQuad> pendingItemQuads = new HashSet<>();
+	private static final VirtualTextureRequestTracker pendingVirtualTextureQuads = new VirtualTextureRequestTracker();
 	private static final VirtualTextureTileRequestQueue pendingVirtualTextureTiles =
 		new VirtualTextureTileRequestQueue(MAX_PENDING_TILE_REQUESTS);
 	private static final Set<VirtualTextureTileKey> animatedVirtualTextureTiles = new HashSet<>();
@@ -87,7 +84,6 @@ public final class AtlasPreviewState {
 	private static int lowAtlasDownscaleFactor = 1;
 	private static volatile long generation;
 	private static VirtualTextureRequestTracker.TileCursor activeVirtualTextureCursor;
-	private static VirtualTextureRequestTracker.UvQuad activeVirtualTextureQuad;
 	private static double activeVirtualTextureDistanceSquared = Double.POSITIVE_INFINITY;
 
 	private AtlasPreviewState() {
@@ -378,7 +374,7 @@ public final class AtlasPreviewState {
 			+ cache.capacityBytes() / 1024 + " KiB, evictions=" + cache.evictionCount()
 			+ ", pending tiles=" + pendingVirtualTextureTiles.size()
 			+ ", loading=" + loadingTiles.size()
-			+ ", pending quads=" + (VIRTUAL_TEXTURE_REQUEST_TRACKER.pendingCount() + pendingVirtualTextureQuads.size())
+			+ ", pending quads=" + (VIRTUAL_TEXTURE_REQUEST_TRACKER.pendingCount() + pendingVirtualTextureQuads.pendingCount())
 			+ ", refresh counter=" + streamRerequestCounter;
 	}
 
@@ -548,6 +544,7 @@ public final class AtlasPreviewState {
 	private static final int STREAM_MIP0_BLOCKS = 48;
 	private static final int STREAM_REFRESH_TICKS = 5;
 	private static final int STREAM_REREQUEST_REFRESHES = 20;
+	private static final double STREAM_MOVEMENT_REREQUEST_BLOCKS = 16.0;
 	private static int streamRerequestCounter;
 	private static final java.util.Map<Long, java.util.Set<net.minecraft.client.renderer.texture.TextureAtlasSprite>> streamSections =
 		new java.util.concurrent.ConcurrentHashMap<>();
@@ -558,6 +555,9 @@ public final class AtlasPreviewState {
 	private static volatile double streamCameraZ;
 	private static int streamRefreshTicks;
 	private static long streamGeneration = Long.MIN_VALUE;
+	private static double streamRequestCameraX = Double.NaN;
+	private static double streamRequestCameraY;
+	private static double streamRequestCameraZ;
 	private static volatile java.util.Set<String> activeAnimatedSprites = java.util.Set.of();
 	// Displayed frame (strip index) of every animated sprite, updated each tick by updateAnimatedFrames.
 	private static final java.util.Map<String, FrameState> spriteFrames = new java.util.concurrent.ConcurrentHashMap<>();
@@ -870,6 +870,17 @@ public final class AtlasPreviewState {
 		streamCameraX = camera.x;
 		streamCameraY = camera.y;
 		streamCameraZ = camera.z;
+		double movedX = camera.x - streamRequestCameraX;
+		double movedY = camera.y - streamRequestCameraY;
+		double movedZ = camera.z - streamRequestCameraZ;
+		if (!Double.isFinite(streamRequestCameraX)
+				|| movedX * movedX + movedY * movedY + movedZ * movedZ
+					>= STREAM_MOVEMENT_REREQUEST_BLOCKS * STREAM_MOVEMENT_REREQUEST_BLOCKS) {
+			requestedStreamSections.clear();
+			streamRequestCameraX = camera.x;
+			streamRequestCameraY = camera.y;
+			streamRequestCameraZ = camera.z;
+		}
 		double reach = radius + config.hysteresis() + STREAM_PREFETCH_BLOCKS;
 		streamReach = reach;
 		java.util.Set<String> animatedInReach = new java.util.HashSet<>();
@@ -936,28 +947,26 @@ public final class AtlasPreviewState {
 		long currentGeneration = pageTable.layout().atlasGeneration();
 		for (VirtualTextureRequestTracker.UvQuad quad
 				: VIRTUAL_TEXTURE_REQUEST_TRACKER.drain(MAX_UV_QUADS_PER_TICK, currentGeneration)) {
-			if (quad.distanceSquared() == 0.0) {
-				if (pendingItemQuads.add(quad)) {
-					pendingVirtualTextureQuads.addFirst(quad);
-				}
-			} else {
-				pendingVirtualTextureQuads.addLast(quad);
-			}
+			pendingVirtualTextureQuads.offer(quad);
 		}
 
 		int plannedKeys = 0;
 		while (plannedKeys < MAX_TILE_KEYS_PER_TICK) {
 			if (activeVirtualTextureCursor == null) {
-				VirtualTextureRequestTracker.UvQuad quad = pendingVirtualTextureQuads.pollFirst();
+				VirtualTextureRequestTracker.UvQuad quad = pendingVirtualTextureQuads.poll(currentGeneration);
 				if (quad == null) {
 					break;
+				}
+				int streamedMips = Math.min(pageTable.layout().mipLevelCount(),
+					Integer.numberOfTrailingZeros(Math.max(1, lowAtlasDownscaleFactor)));
+				if (streamedMips == 0) {
+					continue;
 				}
 				activeVirtualTextureCursor = VirtualTextureRequestTracker.cursor(
 					quad,
 					layout,
-					pageTable.layout().mipLevelCount()
+					streamedMips
 				);
-				activeVirtualTextureQuad = quad;
 				activeVirtualTextureDistanceSquared = quad.distanceSquared();
 			}
 			VirtualTextureTileKey key = activeVirtualTextureCursor.next();
@@ -984,9 +993,7 @@ public final class AtlasPreviewState {
 			}
 			plannedKeys++;
 			if (activeVirtualTextureCursor.isComplete()) {
-				pendingItemQuads.remove(activeVirtualTextureQuad);
 				activeVirtualTextureCursor = null;
-				activeVirtualTextureQuad = null;
 				activeVirtualTextureDistanceSquared = Double.POSITIVE_INFINITY;
 			}
 		}
@@ -1010,7 +1017,7 @@ public final class AtlasPreviewState {
 			return new VirtualTextureCacheStatus(false, 0, 0, 0, 0, 0, 0, 0);
 		}
 		int pendingQuads = VIRTUAL_TEXTURE_REQUEST_TRACKER.pendingCount()
-			+ pendingVirtualTextureQuads.size()
+			+ pendingVirtualTextureQuads.pendingCount()
 			+ (activeVirtualTextureCursor == null ? 0 : 1);
 		return new VirtualTextureCacheStatus(
 			true,
@@ -2187,14 +2194,12 @@ public final class AtlasPreviewState {
 		}
 		virtualTextureLayout = null;
 		pendingVirtualTextureQuads.clear();
-		pendingItemQuads.clear();
 		pendingVirtualTextureTiles.clear();
 		animatedVirtualTextureTiles.clear();
 		animatedTiles.clear();
 		discardPreparedTiles();
 		spriteFrames.clear();
 		activeVirtualTextureCursor = null;
-		activeVirtualTextureQuad = null;
 		activeVirtualTextureDistanceSquared = Double.POSITIVE_INFINITY;
 		closeVirtualTextureGpuPageTable();
 		closeAnimatedSprites(animatedSprites);

@@ -104,6 +104,23 @@ class VirtualTextureTileBuilderTest {
 		);
 	}
 
+	@Test
+	void retainsPaddedSpritesAcrossTileAndMipBoundaries() {
+		var builder = new VirtualTextureTileBuilder(16, 8, 4, 3, 1, List.of(
+			sprite("crossing", 3, 1, 2, 4, 1, 1, false,
+				image(2, 4, RED), image(1, 2, GREEN), image(1, 1, BLUE)),
+			sprite("other", 12, 0, 4, 4, 0, 0, true)
+		));
+		var left = builder.build(new VirtualTextureTileKey(1, 0, 0, 0), 3);
+		var right = builder.build(new VirtualTextureTileKey(1, 0, 1, 0), 3);
+		assertEquals(RED, left.get(0).pixel(3, 1));
+		assertEquals(RED, right.get(0).pixel(1, 1));
+		assertEquals(GREEN, left.get(1).pixel(1, 0));
+		assertEquals(GREEN, right.get(1).pixel(0, 0));
+		assertEquals(BLUE, left.get(2).pixel(0, 0));
+		assertEquals(BLUE, right.get(2).pixel(0, 0));
+	}
+
 	private static VirtualTextureTileBuilder.SpriteSource sprite(
 		String name,
 		int x,

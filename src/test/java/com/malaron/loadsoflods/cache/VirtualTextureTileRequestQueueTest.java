@@ -54,7 +54,7 @@ class VirtualTextureTileRequestQueueTest {
 	}
 
 	@Test
-	void prioritizesNearbyTilesWithinEachMipLevel() {
+	void prioritizesNearbyTilesAcrossMipLevels() {
 		VirtualTextureTileRequestQueue queue = new VirtualTextureTileRequestQueue(4);
 		VirtualTextureTileKey coarseNearby = key(2, 0);
 		VirtualTextureTileKey fineFar = key(0, 1);
@@ -64,9 +64,19 @@ class VirtualTextureTileRequestQueueTest {
 		assertTrue(queue.offer(fineFar, 900.0));
 		assertTrue(queue.offer(fineNear, 100.0));
 
+		assertEquals(coarseNearby, queue.poll());
 		assertEquals(fineNear, queue.poll());
 		assertEquals(fineFar, queue.poll());
-		assertEquals(coarseNearby, queue.poll());
+	}
+
+	@Test
+	void nearbyCoarseRequestDisplacesFarFineRequestWhenFull() {
+		var queue = new VirtualTextureTileRequestQueue(1);
+		var far = key(0, 0);
+		var near = key(2, 1);
+		assertTrue(queue.offer(far, 900));
+		assertTrue(queue.offer(near, 25));
+		assertEquals(near, queue.poll());
 	}
 
 	@Test

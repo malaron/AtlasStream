@@ -203,7 +203,9 @@ for sprites used by sections within the streaming range or by recently drawn
 block-item models (within a time-limited per-tick upload budget, built on worker threads). Interpolated
 animations are blended in 4 steps between frames. New tiles are also built on
 worker threads, nearest first, and the render thread only uploads finished
-tiles within a small time budget. Each mip level is requested only within its
+tiles within a small time budget. Tile construction finds intersecting sprites
+once per tile rather than rescanning the entire atlas for every cache mip.
+Each mip level is requested only within its
 useful range (about 48 blocks for mip 0, doubling per level), and levels as
 coarse as the low atlas are never requested, which keeps the cache from
 overflowing. Sodium's chunk shader is patched at compile time to
@@ -242,8 +244,9 @@ commands are prohibited. The service plans up to 512 tile keys and processes up
 to 32 new tile uploads per tick, stopping after roughly 4 ms once at least one
 upload has completed. Already-resident tiles are skipped when planning and again
 before upload; resident requests refresh their distance priority. The
-bounded pending queue prioritizes finer
-atlas mip levels, deduplicates keys, and evicts coarse requests first when full.
+bounded pending queues prioritize nearby requests, deduplicate sprites and tiles,
+and prefer finer mip levels at the same distance. New nearby requests can pass
+older prefetch work rather than waiting behind it.
 Enabling distance preview schedules loaded Sodium
 terrain for remeshing so already-built sections also generate initial requests.
 `/lods cache` includes a lifetime count of completed UV quads to distinguish
@@ -251,12 +254,11 @@ an empty request queue from a capture hook that is not running. Without Iris, ti
 requested for sections within `highResolutionDistance + hysteresis + 32` blocks and
 for recently drawn block-atlas item models;
 sections that come into range later are requested as the camera moves, and requests are
-renewed after an atlas rebuild. Requests are based on chunk meshing, not
+renewed after an atlas rebuild and after moving 16 blocks. Requests are based on chunk meshing, not
 camera visibility. Requests now carry the squared distance between the meshed
 section center and its captured Sodium build camera: nearby section requests
 are planned first, and repeated requests for a tile upgrade its queue priority
-when a nearer section uses it. Fine mip levels remain higher priority than
-distance within each mip level. Tile keys include atlas generation and mip level so
+when a nearer section uses it. Tile keys include atlas generation and mip level so
 stale resource-pack tiles can be invalidated cleanly. Streamed mode releases
 the full-resolution albedo atlas and replaces it with the bounded tile cache
 for near terrain. With Iris, the PBR atlases are reduced as well; without

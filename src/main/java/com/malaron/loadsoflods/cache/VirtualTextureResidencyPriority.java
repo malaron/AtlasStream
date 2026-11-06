@@ -21,6 +21,9 @@ public final class VirtualTextureResidencyPriority {
 		}
 		Entry old = entries.get(key);
 		if (old != null) {
+			if (old.epoch() == epoch && distanceSquared >= old.distanceSquared()) {
+				return;
+			}
 			ordered.remove(old);
 			if (old.epoch() == epoch) {
 				distanceSquared = Math.min(distanceSquared, old.distanceSquared());

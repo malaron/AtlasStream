@@ -69,6 +69,21 @@ public final class VirtualTextureRequestTracker {
 		return result;
 	}
 
+	public synchronized UvQuad poll(long atlasGeneration) {
+		while (!pendingQuads.isEmpty()) {
+			UvQuad quad = pendingQuads.pollFirstEntry().getValue();
+			uniquePendingQuads.remove(quad.identity());
+			if (quad.atlasGeneration() == atlasGeneration) {
+				return quad;
+			}
+		}
+		return null;
+	}
+
+	public void offer(UvQuad quad) {
+		enqueue(Objects.requireNonNull(quad, "quad"));
+	}
+
 	public synchronized void clear() {
 		pendingQuads.clear();
 		uniquePendingQuads.clear();

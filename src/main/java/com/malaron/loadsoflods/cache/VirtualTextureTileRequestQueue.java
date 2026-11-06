@@ -9,8 +9,8 @@ import java.util.TreeMap;
 public final class VirtualTextureTileRequestQueue {
 	private final int maximumSize;
 	private final TreeMap<RequestPriority, ArrayDeque<VirtualTextureTileKey>> requestsByPriority =
-		new TreeMap<>(Comparator.comparingInt(RequestPriority::mipLevel)
-			.thenComparingDouble(RequestPriority::distanceSquared));
+		new TreeMap<>(Comparator.comparingDouble(RequestPriority::distanceSquared)
+			.thenComparingInt(RequestPriority::mipLevel));
 	private final Map<VirtualTextureTileKey, RequestPriority> uniqueRequests = new HashMap<>();
 
 	public VirtualTextureTileRequestQueue(int maximumSize) {
@@ -100,8 +100,8 @@ public final class VirtualTextureTileRequestQueue {
 	}
 
 	private static int compare(RequestPriority left, RequestPriority right) {
-		int mipOrder = Integer.compare(left.mipLevel(), right.mipLevel());
-		return mipOrder != 0 ? mipOrder : Double.compare(left.distanceSquared(), right.distanceSquared());
+		int distanceOrder = Double.compare(left.distanceSquared(), right.distanceSquared());
+		return distanceOrder != 0 ? distanceOrder : Integer.compare(left.mipLevel(), right.mipLevel());
 	}
 
 	private record RequestPriority(int mipLevel, double distanceSquared) {

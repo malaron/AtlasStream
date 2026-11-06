@@ -57,6 +57,14 @@ public final class VirtualTextureTileBuilder {
 			throw new IllegalArgumentException("Tile coordinates are outside the atlas mip level");
 		}
 
+		int baseOriginX = key.tileX() * tileSize;
+		int baseOriginY = key.tileY() * tileSize;
+		List<SpriteSource> intersectingSprites = new ArrayList<>();
+		for (SpriteSource sprite : sprites) {
+			if (intersects(sprite, key.mipLevel(), baseOriginX, baseOriginY, tileSize, tileSize)) {
+				intersectingSprites.add(sprite);
+			}
+		}
 		List<TileMip> result = new ArrayList<>(tileMipLevelCount);
 		for (int localMip = 0; localMip < tileMipLevelCount; localMip++) {
 			int width = Math.max(1, tileSize >> localMip);
@@ -71,12 +79,9 @@ public final class VirtualTextureTileBuilder {
 			int sourceWidth = Math.max(1, atlasWidth >> sourceMip);
 			int sourceHeight = Math.max(1, atlasHeight >> sourceMip);
 			int[] pixels = new int[Math.multiplyExact(width, height)];
-			for (SpriteSource sprite : sprites) {
+			for (SpriteSource sprite : intersectingSprites) {
 				MipImage image;
 				if (sprite.animated()) {
-					if (!intersects(sprite, sourceMip, originX, originY, width, height)) {
-						continue;
-					}
 					image = animationFrames == null ? null : animationFrames.currentFrame(sprite.name(), sourceMip);
 					if (image == null) {
 						throw new AnimatedTileException(sprite.name());

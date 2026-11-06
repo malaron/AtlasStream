@@ -55,6 +55,23 @@ class VirtualTextureRequestTrackerTest {
 	}
 
 	@Test
+	void laterNearbyRequestPreemptsAndUpgradesBackloggedSprites() {
+		var tracker = new VirtualTextureRequestTracker();
+		for (int i = 0; i < 1000; i++) {
+			double u = i / 2000.0;
+			tracker.offer(new VirtualTextureRequestTracker.UvQuad(u, 0, u + 0.0001, 0.1, 7, 1000 + i));
+		}
+		var near = new VirtualTextureRequestTracker.UvQuad(0.6, 0, 0.7, 0.1, 7, 4);
+		tracker.offer(near);
+		assertEquals(near, tracker.poll(7));
+		double u = 200 / 2000.0;
+		var closer = new VirtualTextureRequestTracker.UvQuad(u, 0, u + 0.0001, 0.1, 7, 1);
+		tracker.offer(closer);
+		assertEquals(1000, tracker.pendingCount());
+		assertEquals(closer, tracker.poll(7));
+	}
+
+	@Test
 	void cursorEnumeratesAllTilesTouchedAtEachMipLevel() {
 		VirtualTextureLayout layout = new VirtualTextureLayout(512, 512, 128, 0);
 		VirtualTextureRequestTracker.UvQuad quad =
