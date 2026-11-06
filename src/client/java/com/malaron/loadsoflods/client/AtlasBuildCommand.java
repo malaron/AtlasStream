@@ -10,8 +10,10 @@ import com.malaron.loadsoflods.LoadsOfLods;
 import com.malaron.loadsoflods.atlas.AtlasBuildResult;
 import com.malaron.loadsoflods.atlas.AtlasBuilder;
 import com.malaron.loadsoflods.cache.VirtualTextureShaderPatcher;
+import java.util.function.Consumer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 
 import static net.fabricmc.fabric.api.client.command.v2.ClientCommands.literal;
@@ -149,29 +151,67 @@ public final class AtlasBuildCommand {
 	private static int enableDistancePreview(
 		net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource source
 	) {
+		return enableDistancePreview(source.getClient(), source::sendFeedback, source::sendError);
+	}
+
+	public static int enableDistancePreview(
+		Minecraft client,
+		Consumer<Component> feedback,
+		Consumer<Component> errors
+	) {
+		if (client.level == null || client.player == null) {
+			errors.accept(Component.literal("Join a world before enabling distance-based LOD."));
+			return 0;
+		}
 		if (!FabricLoader.getInstance().isModLoaded("sodium")) {
-			source.sendError(Component.literal("Distance-based preview currently requires Sodium."));
+			errors.accept(Component.literal("Distance-based preview currently requires Sodium."));
 			return 0;
 		}
 		if (!SodiumLodBridge.isIrisShaderPackInUse() && !VirtualTextureShaderPatcher.isPatchApplied()) {
-			source.sendError(
-				Component.literal("Sodium's supported virtual-texture shader has not compiled yet. Enter a world, wait for chunk rendering, then retry /lods preview-distance.")
+			errors.accept(
+				Component.literal("Sodium's supported virtual-texture shader has not compiled yet. Wait for chunk rendering, then retry enabling distance-based LOD.")
 			);
 			return 0;
 		}
-		return enablePreview(source, true);
+		if (AtlasPreviewState.isDistancePreviewEnabled()) {
+			feedback.accept(Component.literal("Distance-based LOD is already enabled. Reload resource packs to rebuild the atlas with changed texture reduction or debug tint."));
+			return 1;
+		}
+		if (SodiumLodBridge.isIrisShaderPackInUse() && AtlasPreviewState.hasLowAtlas()
+				&& !AtlasPreviewState.isStreamedAtlasActive()) {
+			errors.accept(Component.literal(
+				"Reload resource packs before enabling distance-based LOD with Iris; the existing low preview does not include the required PBR atlases."
+			));
+			return 0;
+		}
+		try {
+			return enablePreview(client, feedback, errors, true);
+		} catch (RuntimeException exception) {
+			LoadsOfLods.LOGGER.error("Could not enable distance-based LOD", exception);
+			errors.accept(Component.literal("Could not enable distance-based LOD: " + exception.getMessage()));
+			return 0;
+		}
 	}
 
 	private static int enablePreview(
 		net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource source,
 		boolean distancePreview
 	) {
+		return enablePreview(source.getClient(), source::sendFeedback, source::sendError, distancePreview);
+	}
+
+	private static int enablePreview(
+		Minecraft client,
+		Consumer<Component> feedback,
+		Consumer<Component> errors,
+		boolean distancePreview
+	) {
 		if (AtlasPreviewState.isBuilding()) {
-			source.sendError(Component.literal("The low-resolution atlas preview is still being built."));
+			errors.accept(Component.literal("The low-resolution atlas preview is still being built."));
 			return 0;
 		}
 		if (AtlasPreviewState.isStreamedAtlasActive() && !distancePreview) {
-			source.sendError(
+			errors.accept(
 				Component.literal("The full-resolution atlas was released. Reload resource packs to restore it.")
 			);
 			return 0;
@@ -181,10 +221,10 @@ public final class AtlasBuildCommand {
 				AtlasPreviewState.enableDistancePreview();
 				SodiumLodBridge.scheduleVisibleTerrainRebuild();
 				boolean irisShaderpack = SodiumLodBridge.isIrisShaderPackInUse();
-				source.sendFeedback(
+				feedback.accept(
 					Component.literal(
 						(irisShaderpack
-							? "Reduced albedo preview enabled with Iris. All terrain uses the low-resolution albedo atlas; PBR maps remain untouched."
+							? "Distance-based LOD enabled with Iris."
 							: "Streamed albedo LOD enabled. Nearby terrain uses the bounded high-resolution tile cache, and the low atlas is the fallback.")
 							+ (AtlasPreviewState.isOriginalAtlasReleaseConfirmed()
 								? " The full block atlas was released; reload resource packs to restore it."
@@ -193,27 +233,26 @@ public final class AtlasBuildCommand {
 				);
 			} else {
 				AtlasPreviewState.enableLowPreview();
-				source.sendFeedback(Component.literal("Low-resolution atlas preview enabled for chunk terrain."));
+				feedback.accept(Component.literal("Low-resolution atlas preview enabled for chunk terrain."));
 			}
 			return 1;
 		}
 
-		var client = source.getClient();
 		if (!(client.getTextureManager().getTexture(net.minecraft.client.renderer.texture.TextureAtlas.LOCATION_BLOCKS)
 				instanceof net.minecraft.client.renderer.texture.TextureAtlas atlas)) {
-			source.sendError(Component.literal("The Minecraft block atlas is not available yet."));
+			errors.accept(Component.literal("The Minecraft block atlas is not available yet."));
 			return 0;
 		}
-		source.sendFeedback(
+		feedback.accept(
 			Component.literal(
 				"Building a separate low-resolution block atlas in Minecraft's existing sprite layout..."
 			)
 		);
 		try {
-			AtlasPreviewState.buildAndEnable(atlas, client.getResourceManager(), source, distancePreview);
+			AtlasPreviewState.buildAndEnable(atlas, client.getResourceManager(), feedback, errors, distancePreview);
 		} catch (RuntimeException exception) {
 			LoadsOfLods.LOGGER.error("Could not start low-resolution atlas preview build", exception);
-			source.sendError(Component.literal("Could not start atlas preview: " + exception.getMessage()));
+			errors.accept(Component.literal("Could not start atlas preview: " + exception.getMessage()));
 			return 0;
 		}
 		return 1;

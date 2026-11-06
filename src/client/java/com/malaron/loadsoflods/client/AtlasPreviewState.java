@@ -170,6 +170,9 @@ public final class AtlasPreviewState {
 					}
 					if (!currentAtlas) {
 						LoadsOfLods.LOGGER.info("Discarding low-resolution atlas preview because the source atlas changed");
+						errors.accept(net.minecraft.network.chat.Component.literal(
+							"Low-atlas build was discarded because the source atlas changed. Retry after the resource reload."
+						));
 						return;
 					}
 					createLowResolutionTexture(
@@ -200,7 +203,9 @@ public final class AtlasPreviewState {
 					net.minecraft.network.chat.Component.literal(
 						(enableDistancePreview
 							? SodiumLodBridge.isIrisShaderPackInUse()
-								? "Reduced albedo preview enabled. Iris shaderpack detected; all terrain uses low-resolution albedo and Iris PBR maps are reduced to match. "
+								? (isNearAtlasActive()
+									? "Distance-based LOD enabled with Iris; nearby terrain uses the near atlas where available. "
+									: "Distance-based LOD enabled with Iris; the near atlas is unavailable, so terrain uses the reduced atlas. ")
 								: "Streamed albedo LOD enabled. Nearby terrain uses the bounded high-resolution tile cache, and the low atlas is the fallback. "
 							: "Separate low-resolution block atlas enabled. Run /lods preview-high to switch back. ")
 							+ "Low atlas is " + lowResolutionTexture.getWidth(0) + "x"

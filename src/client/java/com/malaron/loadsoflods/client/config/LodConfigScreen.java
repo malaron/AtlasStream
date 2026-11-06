@@ -3,8 +3,10 @@ package com.malaron.loadsoflods.client.config;
 import java.util.List;
 
 import com.malaron.loadsoflods.LoadsOfLods;
+import com.malaron.loadsoflods.client.AtlasBuildCommand;
 import com.malaron.loadsoflods.client.LoadsOfLodsClient;
 import com.malaron.loadsoflods.lod.LodConfig;
+import dev.isxander.yacl3.api.ButtonOption;
 import dev.isxander.yacl3.api.ConfigCategory;
 import dev.isxander.yacl3.api.Option;
 import dev.isxander.yacl3.api.OptionDescription;
@@ -14,6 +16,8 @@ import dev.isxander.yacl3.api.controller.DoubleSliderControllerBuilder;
 import dev.isxander.yacl3.api.controller.IntegerSliderControllerBuilder;
 import dev.isxander.yacl3.api.controller.LongSliderControllerBuilder;
 import dev.isxander.yacl3.api.controller.TickBoxControllerBuilder;
+import net.minecraft.ChatFormatting;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
@@ -32,10 +36,42 @@ final class LodConfigScreen {
 		boolean[] tint = {current.debugTintLowResolution()};
 		boolean[] onLaunch = {current.enableOnLaunch()};
 
+		ButtonOption activateOption = ButtonOption.createBuilder()
+			.name(Component.literal("Distance-based LOD"))
+			.text(Component.literal("Activate"))
+			.description(OptionDescription.of(Component.literal(
+				"Activate distance-based LOD in the current world using saved settings. Save changes first. "
+					+ "If it is already active, reload resource packs to apply texture reduction or debug tint changes."
+			)))
+			.action((screen, button) -> {
+				if (screen.pendingChanges()) {
+					screen.setSaveButtonMessage(
+						Component.literal("Save first").withStyle(ChatFormatting.RED),
+						Component.literal("Save your settings before activating distance-based LOD.")
+					);
+					return;
+				}
+				Minecraft client = Minecraft.getInstance();
+				if (client.level == null || client.player == null) {
+					screen.setSaveButtonMessage(
+						Component.literal("Join a world").withStyle(ChatFormatting.RED),
+						Component.literal("Distance-based LOD can only be activated in a world.")
+					);
+					return;
+				}
+				screen.onClose();
+				AtlasBuildCommand.enableDistancePreview(
+					client,
+					message -> client.gui.chatListener().handleSystemMessage(message, true),
+					message -> client.gui.chatListener().handleSystemMessage(message.copy().withStyle(ChatFormatting.RED), true)
+				);
+			})
+			.build();
+
 		Option<Boolean> onLaunchOption = Option.<Boolean>createBuilder()
 			.name(Component.literal("Enable on launch"))
 			.description(OptionDescription.of(Component.literal(
-				"Build the reduced atlas automatically after the game starts, once you join a world, so you don't need /lods preview-distance. Takes effect next launch."
+				"Build the reduced atlas automatically after the game starts, once you join a world. Takes effect next launch."
 			)))
 			.binding(true, () -> onLaunch[0], value -> onLaunch[0] = value)
 			.controller(TickBoxControllerBuilder::create)
@@ -45,7 +81,7 @@ final class LodConfigScreen {
 			.name(Component.literal("Texture reduction"))
 			.description(OptionDescription.of(Component.literal(
 				"How much the far/low block atlas is shrunk (1:N per axis). Higher saves more VRAM but looks blurrier. "
-					+ "Takes effect the next time you run /lods preview-distance (reload resource packs first)."
+					+ "Takes effect when the atlas is rebuilt; reload resource packs if LOD is already active."
 			)))
 			.binding(defaults.downscaleFactor(), () -> factor[0], value -> factor[0] = value)
 			.controller(option -> CyclingListControllerBuilder.create(option)
@@ -88,7 +124,7 @@ final class LodConfigScreen {
 		Option<Boolean> tintOption = Option.<Boolean>createBuilder()
 			.name(Component.literal("Debug: tint low-resolution textures"))
 			.description(OptionDescription.of(Component.literal(
-				"Colors the reduced atlas magenta so you can see where it is used. Applies when the preview is rebuilt (reload, then /lods preview-distance)."
+				"Colors the reduced atlas magenta so you can see where it is used. Applies when the atlas is rebuilt."
 			)))
 			.binding(false, () -> tint[0], value -> tint[0] = value)
 			.controller(TickBoxControllerBuilder::create)
@@ -98,6 +134,7 @@ final class LodConfigScreen {
 			.title(Component.literal("Loads of Lods"))
 			.category(ConfigCategory.createBuilder()
 				.name(Component.literal("Textures"))
+				.option(activateOption)
 				.option(factorOption)
 				.option(distanceOption)
 				.option(hysteresisOption)
