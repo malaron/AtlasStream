@@ -8,6 +8,8 @@ per chunk section. Atlas preparation and LOD decisions should be shared before
 renderer-specific integration, so vanilla, Sodium, and Iris support can build on
 the same resource data and policy.
 
+Reported issues and deferred investigations are tracked in [BUGS.md](./BUGS.md).
+
 ## Current status
 
 The current prototype provides:
