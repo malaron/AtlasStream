@@ -5,6 +5,38 @@ as a defect. Update entries as evidence is gathered or issues are resolved.
 
 ## Open
 
+### Oversized atlas fails to activate with mipmaps disabled
+
+- **Status:** Confirmed; restore Minecraft's mipmap levels to 4 as a workaround.
+- **Observed:** With Optimum Realism 1024 and Iris, changing Minecraft's
+  mipmap levels from 4 to 0 caused a long reload and left the scene without
+  normal textures. Restoring level 4 recovered rendering.
+- **Diagnostic evidence:** The zero-mipmap stitch selected a 1:2 reduction for
+  a 65536x32768 layout, producing a 32768x16384 reduced image. Uploading the
+  2 GiB image failed with an integer overflow in `NativeImage.getPixelBytes`;
+  the log subsequently reported OpenGL framebuffer errors. The source layout
+  was virtual, so a failed preview could not simply use a full GPU atlas.
+- **Next investigation:** Support safe reduction and compact remapping when
+  mipmaps are disabled, including sprite alignment, upload size limits, and
+  a usable fallback for virtual atlases. Do not assume the overflow is the
+  only obstacle.
+
+### Limited near detail with a 1024x resource pack
+
+- **Status:** Confirmed compact-atlas slot pressure; jump blur not isolated.
+- **Observed:** With Optimum Realism 1024 and Iris, increasing the
+  high-resolution distance from 1 to 2 chunks did not visibly expand the
+  sharp area. Ground looked blurrier while jumping, but did not turn magenta
+  with the reduced-atlas debug tint enabled.
+- **Diagnostic evidence:** The 16384x16384 compact near atlas reported full.
+  At one view F3 showed 247 sprites resident, 217 waiting, 0 pending, 247
+  evicted, and 3883/4160 MiB committed. The cache budget does not enlarge the
+  compact texture's slot capacity. The untinted jump blur is not evidence of
+  a switch to the reduced atlas; filtering or shader effects remain possible.
+- **Next investigation:** Evaluate larger compact atlas layouts and memory
+  costs, including slot placement and remapping limits, and test the jump
+  blur separately from the capacity issue.
+
 ### FPS drops in a complex world area with Kappa
 
 - **Status:** Performance investigation deferred; cause not isolated.
