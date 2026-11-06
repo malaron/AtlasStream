@@ -4,6 +4,7 @@ import java.util.List;
 
 import com.malaron.loadsoflods.LoadsOfLods;
 import com.malaron.loadsoflods.client.AtlasBuildCommand;
+import com.malaron.loadsoflods.client.AtlasPreviewState;
 import com.malaron.loadsoflods.client.LoadsOfLodsClient;
 import com.malaron.loadsoflods.lod.LodConfig;
 import dev.isxander.yacl3.api.ButtonOption;
@@ -16,10 +17,14 @@ import dev.isxander.yacl3.api.controller.DoubleSliderControllerBuilder;
 import dev.isxander.yacl3.api.controller.IntegerSliderControllerBuilder;
 import dev.isxander.yacl3.api.controller.LongSliderControllerBuilder;
 import dev.isxander.yacl3.api.controller.TickBoxControllerBuilder;
+import dev.isxander.yacl3.gui.YACLScreen;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.ComponentContents;
+import net.minecraft.network.chat.Style;
+import net.minecraft.util.FormattedCharSequence;
 
 // Only loaded when YACL is present; LoadsOfLodsModMenu guards the entry point.
 final class LodConfigScreen {
@@ -36,9 +41,11 @@ final class LodConfigScreen {
 		boolean[] tint = {current.debugTintLowResolution()};
 		boolean[] onLaunch = {current.enableOnLaunch()};
 
+		boolean active = AtlasPreviewState.isDistancePreviewEnabled();
 		ButtonOption activateOption = ButtonOption.createBuilder()
 			.name(Component.literal("Distance-based LOD"))
-			.text(Component.literal("Activate"))
+			.text(new ActivationLabel())
+			.available(!active)
 			.description(OptionDescription.of(Component.literal(
 				"Activate distance-based LOD in the current world using saved settings. Save changes first. "
 					+ "If it is already active, reload resource packs to apply texture reduction or debug tint changes."
@@ -130,7 +137,7 @@ final class LodConfigScreen {
 			.controller(TickBoxControllerBuilder::create)
 			.build();
 
-		return YetAnotherConfigLib.createBuilder()
+		YetAnotherConfigLib config = YetAnotherConfigLib.createBuilder()
 			.title(Component.literal("Loads of Lods"))
 			.category(ConfigCategory.createBuilder()
 				.name(Component.literal("Textures"))
@@ -156,7 +163,46 @@ final class LodConfigScreen {
 					LoadsOfLods.LOGGER.error("Could not save Loads of Lods settings", exception);
 				}
 			})
-			.build()
-			.generateScreen(parent);
+			.build();
+		return new YACLScreen(config, parent) {
+			@Override
+			public void tick() {
+				boolean enabled = AtlasPreviewState.isDistancePreviewEnabled();
+				if (activateOption.available() == enabled) {
+					activateOption.setAvailable(!enabled);
+				}
+				super.tick();
+			}
+		};
+	}
+
+	// YACL keeps one label component; swapping delegates avoids stale cached visual-order text.
+	private static final class ActivationLabel implements Component {
+		private final Component active = Component.literal("Active");
+		private final Component inactive = Component.literal("Activate");
+
+		private Component current() {
+			return AtlasPreviewState.isDistancePreviewEnabled() ? active : inactive;
+		}
+
+		@Override
+		public Style getStyle() {
+			return current().getStyle();
+		}
+
+		@Override
+		public ComponentContents getContents() {
+			return current().getContents();
+		}
+
+		@Override
+		public List<Component> getSiblings() {
+			return current().getSiblings();
+		}
+
+		@Override
+		public FormattedCharSequence getVisualOrderText() {
+			return current().getVisualOrderText();
+		}
 	}
 }

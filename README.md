@@ -145,8 +145,9 @@ All settings can be edited in game via Mod Menu (21.0.0 for 26.3) when Yet
 Another Config Lib is installed; both are optional. To activate distance-based
 LOD manually, join a world, save any pending settings, and use **Activate** in
 the Loads of Lods settings. The screen closes and progress or errors appear in
-chat. If LOD is already active, reload resource packs to rebuild the atlas
-after changing texture reduction or debug tint. `/lods preview-distance`
+chat. The button shows **Active** and is disabled while LOD is already enabled.
+Reload resource packs to rebuild the atlas after changing texture reduction or
+debug tint. `/lods preview-distance`
 remains available as a command. `/lods vram` prints a VRAM
 report, and an F3 debug entry shows the current mode, factor and atlas state.
 
