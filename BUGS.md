@@ -5,6 +5,27 @@ as a defect. Update entries as evidence is gathered or issues are resolved.
 
 ## Open
 
+### FPS drops in a complex world area with Kappa
+
+- **Status:** Performance investigation deferred; cause not isolated.
+- **Observed:** With Kappa and Patrix 256, FPS dropped into the 30s while
+  walking through an area containing a cow pen, a water item stream, and nearby
+  storage. At one stationary viewpoint, facing the pen gave about 60 FPS and
+  looking away gave about 70 FPS; roughly 80 entities were reported.
+- **Mitigation:** Reducing Minecraft's entity distance from 200% to 100%
+  increased FPS at one comparable view from about 50 to 60. A later walking
+  test reached a low of about 47 FPS; the user did not notice missing distant
+  entities. Walking results are not directly controlled comparisons.
+- **Diagnostic evidence:** A render-thread profile showed low-atlas animation
+  blending and near-atlas sprite refresh among the sampled work. Both paths
+  were optimized, but the user did not observe a clear FPS improvement from
+  the changes alone. The render thread also appeared in graphics
+  synchronization waits; GPU utilization and CPU samples did not establish
+  the limiting stage.
+- **Next investigation:** Compare repeatable routes and views, and isolate
+  entity, block-entity, terrain, and shader shadow costs before changing
+  quality settings or attributing the slowdown to a particular component.
+
 ### Chest and hopper reflections change abruptly with view
 
 - **Status:** Unconfirmed; deferred pending a comparison without the mod.
