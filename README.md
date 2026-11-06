@@ -3,10 +3,9 @@
 Loads of Lods is a client-side Minecraft mod prototype exploring distance-based
 texture level of detail (LOD) for large resource packs.
 
-The long-term goal is to select a high-resolution or reduced-detail block atlas
-per chunk section. Atlas preparation and LOD decisions should be shared before
-renderer-specific integration, so vanilla, Sodium, and Iris support can build on
-the same resource data and policy.
+The prototype uses Sodium for terrain integration and optionally supports Iris
+shaderpacks. It prepares a reduced block atlas and streams nearby detail using
+different rendering paths with and without an active Iris shaderpack.
 
 Reported issues and deferred investigations are tracked in [BUGS.md](./BUGS.md).
 
@@ -20,43 +19,45 @@ The current prototype provides:
   from the camera.
 - A resource-pack atlas builder that creates a matched atlas pair and sprite
   layout manifest.
-- A chunk-terrain preview that creates a second GPU atlas in Minecraft's
-  existing normalized sprite UV layout, preserving the original atlas.
+- A reduced-atlas preview and a streamed distance mode that can release the
+  original full-resolution block-atlas GPU allocation.
 
 `/lods preview-low` switches terrain to the reduced atlas for visual testing.
 `/lods preview-distance` enables distance-based albedo LOD. Without an active
-Iris shaderpack, Sodium solid and cutout sections near the camera sample
-resident high-resolution tiles, and distant sections use the reduced atlas;
+Iris shaderpack, Sodium terrain samples resident high-resolution tiles where
+available and uses the reduced atlas on cache misses;
 the full high-resolution block-atlas GPU allocation is released. Held and
 dropped block-atlas item models also request nearby full-resolution tiles,
 using the reduced atlas while tiles load or after eviction. Inventory icons and
-other block-atlas users continue to use the reduced atlas. A resource reload restores the
-full-resolution atlas. Cached inventory item images are refreshed when the
-reduced atlas becomes ready, so temporary placeholder colors do not persist.
+other block-atlas users continue to use the reduced atlas. A resource reload
+restores the original atlas when it fits; oversized virtual layouts use a
+placeholder until the streamed atlas is rebuilt. Cached inventory item images
+are refreshed when the reduced atlas becomes ready, so temporary placeholder
+colors do not persist.
 With an Iris shaderpack active, the reduced atlas (albedo
 plus normal/specular LabPBR maps, averaged per channel to the same ratio) serves
-distant terrain, and a separate full-size *sparse* "near atlas" (needs
+distant terrain, and a full-size or compact sparse "near atlas" (needs
 `GL_ARB_sparse_texture`) serves nearby terrain, held items, entities and
 particles. The near atlas commits GPU pages only for sprites used by sections
 within the high-resolution distance (plus a two-chunk prefetch margin) or drawn
 recently, so the full-resolution VRAM is mostly not spent. When its committed
 memory exceeds `highResolutionCacheMiB`, sprites no nearby section needs
 (unused for 10 seconds) are released, least recently needed first; the budget
-is soft, so the current working set is never evicted. With the distance at 0,
+is soft for the current working set. A compact atlas can also evict needed
+sprites under slot pressure, as described below. With the distance at 0,
 all near memory is released. Its albedo and PBR content is
 streamed from the resource pack on worker threads; PBR maps stay vanilla
 (first frame only) while albedo animates, interpolated like vanilla, but only
 for sprites used by sections that are in range and in view. At a distance of 0
 chunks, everything uses the low atlas and nothing animates in the near atlas.
 The mod registers the atlases with Iris's texture tracker so Iris still finds
-them. Translucent terrain remains on the low atlas to avoid cross-atlas sorting
-artifacts. Animated low-atlas sprites follow Minecraft's frame sequence
+them. With an active Iris near atlas, translucent terrain is also split by
+distance. Animated low-atlas sprites follow Minecraft's frame sequence
 and interpolation state. Sodium's packed local section indices are decoded
 and combined with their owning region coordinates before applying the
-world-space distance policy. Sodium's per-region batches are rebuilt from each filtered section
-list before drawing, invalidating only the active terrain pass so other
-prepared passes remain cached. Its translucent pass is rebuilt from the
-complete list so the experimental split does not truncate transparent geometry.
+world-space distance policy. Sodium's per-region batches are rebuilt from each
+filtered section list before drawing, invalidating only the active terrain pass
+so other prepared passes remain cached.
 
 ### Oversized packs: compact near atlas
 
@@ -84,6 +85,15 @@ are drawn from the reduced atlas. A large queue of far sprites is normal when
 the compact atlas is smaller than the view needs. To test this, launch with
 `-Dloadsoflods.compactSize=8192` (texels, default 16384) and watch the F3
 "Near sparse atlas" line and the `Slot pressure:` debug log lines.
+
+### Compatibility
+
+Distance-based terrain rendering requires Sodium. The development and recent
+in-game regression tests used Minecraft 26.3, Fabric Loader 0.20.1, Sodium
+0.9.2, and Iris 1.11.7, including Kappa and Photon shaderpacks. Other renderer,
+shaderpack, GPU, and platform combinations need independent testing; a passing
+build alone does not establish compatibility. Sparse near atlases require
+`GL_ARB_sparse_texture`; without it, Iris terrain uses the reduced atlas.
 
 ### Reduced-atlas disk cache
 
@@ -139,11 +149,12 @@ Distances are in blocks. A section is initially classified as high resolution
 when its bounding box is within the configured distance. Once classified, it
 switches to low resolution only beyond `distance + hysteresis`, and switches
 back only inside `distance - hysteresis`. This dead band avoids repeated
-switches near the boundary. `highResolutionCacheMiB` sets the target budget
-for the planned high-resolution tile cache; the supported range is 64-16384
-MiB. The current renderer still uses the fully resident vanilla
-high-resolution atlas, so this setting is a target only and does not yet
-change GPU allocation.
+switches near the boundary in the Iris section-split path. In the non-Iris
+virtual-texture path, residency is determined per tile instead.
+`highResolutionCacheMiB` accepts 64-16384 MiB. Without Iris it bounds the
+high-resolution GPU tile cache, subject to atlas and GPU size limits. With
+Iris it is a soft target for committed near-atlas memory; needed sprites can
+keep it above that target.
 
 ## Development
 
@@ -156,16 +167,17 @@ Build with `.\gradlew.bat build` on Windows. To test against the resource packs
 currently loaded by Minecraft, install the resulting mod jar, enter a world,
 and run `/lods preview-low` to build and select a second GPU block atlas with
 the same normalized sprite UV layout as Minecraft's atlas. The low atlas is
-physically downscaled by up to 4x per dimension (16x fewer base-level texels);
+physically downscaled by the configured factor (2, 4, or 8 per dimension);
 the scale is reduced if the stitched sprite layout is not aligned for exact
-UV preservation. Run
+UV preservation. For a non-virtual atlas that has not been released, run
 `/lods preview-high` to switch back to the untouched original atlas without
 reloading resource packs after `/lods preview-low`; the generated low atlas
 stays resident for a quick switch back. This low-only preview does not reduce
 total VRAM usage. `/lods preview-distance` instead activates streamed mode and
 releases the original full-resolution block atlas. A resource reload restores
-the original atlas and then rebuilds streamed mode automatically. The low atlas and its CPU
-mip chain are capped at 1 GiB.
+the original atlas when it fits and then rebuilds streamed mode automatically;
+oversized virtual layouts instead use a placeholder. The low-atlas CPU mip
+chain and cached animation frames share a 2 GiB safety limit.
 Mip levels follow the reduced atlas and are generated within each sprite's
 padded bounds to avoid sampling neighboring sprites.
 A resource-pack reload discards the cached low atlas. If the distance preview
@@ -173,14 +185,14 @@ was on, it is rebuilt automatically about a second after the reload (this
 also picks up a changed `downscaleFactor` or debug tint), so no command is
 needed. A manual `/lods preview-distance` is only needed if that rebuild is
 skipped (see `latest.log`).
-Run `/lods preview-distance` to assign solid and cutout Sodium chunk sections
-to the high-resolution tile cache or low-resolution fallback using the
-configured distance and hysteresis. Translucent terrain stays on the low
-fallback in streamed mode to avoid cross-atlas sorting artifacts. With Iris
-present, albedo LOD still works. In distance-preview mode Iris's PBR atlases
-are reduced alongside the albedo atlas; in low-preview mode the original
-full-resolution normal/specular maps stay bound. Iris's active shader samplers
-are refreshed at high/low draw boundaries.
+Run `/lods preview-distance` to enable streamed terrain detail. Without an
+active Iris shaderpack, virtual tiles are sampled where resident, with the
+reduced atlas as fallback. With an active Iris shaderpack, sections switch
+between the reduced atlas and a sparse near atlas; the reduced albedo and PBR
+atlases use matching dimensions, while the near atlas supplies full-resolution
+albedo and PBR. In low-preview mode the original full-resolution normal and
+specular maps stay bound. Iris's active shader samplers are refreshed at
+high/low draw boundaries.
 Iris shaderpack terrain currently uses a hard per-section albedo switch.
 Generic shaderpack crossfading is not
 enabled because Iris's current shader source hook does not reliably preserve
@@ -191,8 +203,8 @@ Minecraft's frame sequence and interpolation state; animation frame caches
 share the CPU image safety limit. Previously blended low-atlas animation frames
 are reused in a separate cache of up to 32 MiB of CPU memory, cleared on atlas
 reload. `/lods perf start` reports how many blends were built or reused during
-its CPU sample, along with near-atlas refresh time. The repeating Nether portal sprite's
-opposite edges are matched at each low-atlas mip level to reduce visible
+its CPU sample, along with near-atlas refresh time. The repeating Nether portal
+sprite's opposite edges are matched at each low-atlas mip level to reduce visible
 seams between adjacent portal blocks after downscaling.
 The byte-bounded LRU eviction primitive and CPU-side virtual-UV-to-tile address
 model are unit-tested. The GPU page-table texture and bounded 2D tile-atlas
@@ -236,9 +248,10 @@ rebuilt from the resource pack. A pack whose stitched atlas exceeds the GPU's ma
 (or `virtualAtlas=always` in the config file, which also skips the full-size upload for packs that
 fit) is therefore stitched against a larger virtual limit of up to 65536x65536, and the block
 atlas keeps those dimensions and sprite coordinates but only holds a 1x1 placeholder texture.
-The rebuild always runs after such a reload, so there is no separate opt-in. With Iris the sparse
-near atlas is skipped when the layout exceeds the sparse texture limit and terrain uses the
-reduced atlas. Only when a layout does not fit even 65536x65536, or for other atlases, are large
+The rebuild always runs after such a reload, so there is no separate opt-in. With Iris, a layout
+exceeding the sparse texture limit uses a compact near atlas when supported; if sparse or compact
+allocation is unavailable, terrain stays on the reduced atlas. Only when a
+layout does not fit even 65536x65536, or for other atlases, are large
 sprites reduced by the smallest power of two that lets the atlas stitch. Atlas dimensions are
 stored minus one in the metadata texture so 65536 fits in two bytes.
 
@@ -267,8 +280,9 @@ when a nearer section uses it. Tile keys include atlas generation and mip level 
 stale resource-pack tiles can be invalidated cleanly. Streamed mode releases
 the full-resolution albedo atlas and replaces it with the bounded tile cache
 for near terrain. With Iris, the PBR atlases are reduced as well; without
-Iris there are none, so the saving is the albedo atlas. Other consumers of Minecraft's shared block
-atlas, including GUI icons, see the low-resolution fallback until resource packs are reloaded.
+Iris there are none, so the saving is the albedo atlas. Without an active
+shaderpack, other consumers of Minecraft's shared block atlas, including GUI
+icons, see the low-resolution fallback while streamed mode is active.
 Use `/lods cache` during `/lods preview-distance` to see resident-tile and
 pending-request counts.
 To diagnose a low-resolution held item, hold it with shaders off and use
