@@ -111,7 +111,8 @@ final class LodConfigScreen {
 		Option<Double> hysteresisOption = Option.<Double>createBuilder()
 			.name(Component.literal("Hysteresis"))
 			.description(OptionDescription.of(Component.literal(
-				"Extra distance in blocks before switching back, to avoid flicker. Clamped to the high-resolution distance."
+				"Extra distance in blocks before switching back, to avoid flicker. Clamped to the high-resolution distance. "
+					+ "The Iris near-entry threshold stays at least half the high-resolution distance."
 			)))
 			.binding(defaults.hysteresis(), () -> hysteresis[0], value -> hysteresis[0] = value)
 			.controller(option -> DoubleSliderControllerBuilder.create(option).range(0.0, 128.0).step(1.0))

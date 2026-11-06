@@ -51,7 +51,8 @@ public final class SectionLodPolicy {
 				? SectionLod.HIGH_RESOLUTION
 				: SectionLod.LOW_RESOLUTION;
 		}
-		return distance < boundary - hysteresis
+		double entryBoundary = Math.max(boundary - hysteresis, boundary * 0.5);
+		return distance < entryBoundary
 			? SectionLod.HIGH_RESOLUTION
 			: SectionLod.LOW_RESOLUTION;
 	}

@@ -833,6 +833,7 @@ public final class SodiumLodBridge {
 		private Vec3 evaluationPosition;
 		private boolean hasCamera;
 		private boolean lastWarm = true;
+		private Object lastConfig;
 
 		private void updateCamera(Vec3 cameraPosition) {
 			int nextCellX = cameraCell(cameraPosition.x);
@@ -841,7 +842,10 @@ public final class SodiumLodBridge {
 			boolean warm = AtlasPreviewState.isNearAtlasWarm();
 			boolean warmChanged = warm != lastWarm;
 			lastWarm = warm;
-			if (warmChanged) {
+			Object config = LoadsOfLodsClient.getConfig();
+			boolean configChanged = config != lastConfig;
+			lastConfig = config;
+			if (warmChanged || configChanged) {
 				Arrays.fill(evaluated, false);
 			}
 			if (hasCamera

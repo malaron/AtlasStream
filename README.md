@@ -154,7 +154,9 @@ report, and an F3 debug entry shows the current mode, factor and atlas state.
 Distances are in blocks. A section is initially classified as high resolution
 when its bounding box is within the configured distance. Once classified, it
 switches to low resolution only beyond `distance + hysteresis`, and switches
-back only inside `distance - hysteresis`. This dead band avoids repeated
+back inside `distance - hysteresis`, or half the configured distance if that
+would be larger. This keeps a usable near range even when hysteresis equals the
+distance. The dead band avoids repeated
 switches near the boundary in the Iris section-split path. In the non-Iris
 virtual-texture path, residency is determined per tile instead.
 `highResolutionCacheMiB` accepts 64-16384 MiB. Without Iris it bounds the
