@@ -1,6 +1,7 @@
 package com.malaron.loadsoflods.client.mixin;
 
 import com.malaron.loadsoflods.LoadsOfLods;
+import com.malaron.loadsoflods.cache.VanillaNearShaderPatcher;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.spongepowered.asm.mixin.Mixin;
@@ -21,7 +22,7 @@ public abstract class IrisNearRemapMixin {
 		"return vec2(a_TexCoord & TEXTURE_MAX_VALUE) / float(TEXTURE_MAX_COORD);";
 	private static final String REMAP_FUNCTION = """
 uniform sampler2D u_LodsNearRemap;
-vec2 loadsOfLodsNearRemap(vec2 uv) {
+vec2 loadsOfLodsNearRemap(vec2 uv, vec2 anchor) {
     ivec2 remapSize = textureSize(u_LodsNearRemap, 0);
     if (remapSize.x <= 1) {
         return uv;
@@ -35,7 +36,8 @@ vec2 loadsOfLodsNearRemap(vec2 uv) {
     ) + 1.0;
     float cell = floor(header1.r * 255.0 + 0.5);
     vec2 texel = uv * (vec2(remapSize.x, rows) * cell);
-    ivec2 cellCoord = clamp(ivec2(floor(texel / cell)),  ivec2(0), ivec2(remapSize.x - 1, rows - 1));
+    vec2 anchorTexel = anchor * (vec2(remapSize.x, rows) * cell);
+    ivec2 cellCoord = clamp(ivec2(floor(anchorTexel / cell)), ivec2(0), ivec2(remapSize.x - 1, rows - 1));
     vec4 entry = texelFetch(u_LodsNearRemap, cellCoord, 0);
     if (entry.a < 0.5) {
         return vec2(cell * 0.5) / compactSize;
@@ -43,6 +45,9 @@ vec2 loadsOfLodsNearRemap(vec2 uv) {
     float dx = floor(entry.r * 255.0 + 0.5) + floor(entry.g * 255.0 + 0.5) * 256.0 - 32768.0;
     float dy = floor(entry.b * 255.0 + 0.5) + mod(floor(entry.a * 255.0 + 0.5), 128.0) * 256.0 - 4096.0;
     return (texel + vec2(dx, dy) * cell) / compactSize;
+}
+vec2 loadsOfLodsNearRemap(vec2 uv) {
+    return loadsOfLodsNearRemap(uv, uv);
 }
 """;
 	private static final java.util.regex.Pattern MID_TEXCOORD = java.util.regex.Pattern.compile(
@@ -60,7 +65,7 @@ vec2 loadsOfLodsNearRemap(vec2 uv) {
 	// Vanilla-style programs (entities, hand, particles) draw many textures, so the remap only applies when the
 	// bound diffuse texture has the compact near atlas's size.
 	private static final String ATLAS_ONLY_FUNCTION = """
-vec2 loadsOfLodsAtlasRemap(vec2 uv) {
+vec2 loadsOfLodsAtlasRemap(vec2 uv, vec2 anchor) {
     ivec2 remapSize = textureSize(u_LodsNearRemap, 0);
     if (remapSize.x <= 1) {
         return uv;
@@ -73,7 +78,10 @@ vec2 loadsOfLodsAtlasRemap(vec2 uv) {
     if (textureSize(gtexture, 0) != compactSize) {
         return uv;
     }
-    return loadsOfLodsNearRemap(uv);
+    return loadsOfLodsNearRemap(uv, anchor);
+}
+vec2 loadsOfLodsAtlasRemap(vec2 uv) {
+    return loadsOfLodsAtlasRemap(uv, uv);
 }
 """;
 
@@ -94,17 +102,15 @@ vec2 loadsOfLodsAtlasRemap(vec2 uv) {
 			if (!declaration.find()) {
 				continue;
 			}
-			String head = source.substring(0, declaration.end());
-			String tail = source.substring(declaration.end());
 			String functions = REMAP_FUNCTION
 				+ (GTEXTURE_DECLARATION.matcher(source).find() ? "" : "uniform sampler2D gtexture;\n")
 				+ ATLAS_ONLY_FUNCTION;
-			tail = tail.replaceAll("\\biris_UV0\\b", "loadsOfLodsAtlasRemap(iris_UV0)");
-			tail = MID_TEXCOORD.matcher(tail).replaceAll(
-				match -> java.util.regex.Matcher.quoteReplacement(
-					"loadsOfLodsAtlasRemap(vec2(mc_midTexCoord.xy) * " + match.group(1) + ")"
-				)
-			);
+			// Include declarations before iris_UV0 when identifying the midpoint attribute.
+			String patchedSource = VanillaNearShaderPatcher.patchReferences(source);
+			declaration = UV0_DECLARATION.matcher(patchedSource);
+			declaration.find();
+			String head = patchedSource.substring(0, declaration.end());
+			String tail = patchedSource.substring(declaration.end());
 			entry.setValue(head + "\n" + functions + tail);
 			changed = true;
 		}

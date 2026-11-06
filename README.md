@@ -66,7 +66,9 @@ the Iris version: an Iris update that changes that text may need a matching
 change here. The log warns when `mc_midTexCoord` is present but could not be
 patched. The same remap is applied to the vanilla (non-terrain) shaders, guarded
 by the bound texture size, so held blocks, falling blocks and particles are
-full-resolution too. With Iris, translucent terrain (glass) is split by distance
+full-resolution too. Where Iris supplies a midpoint UV, non-terrain remapping
+uses it to select the sprite slot and remaps the midpoint for shaders' parallax
+calculations. With Iris, translucent terrain (glass) is split by distance
 so near glass also uses the near atlas.
 
 If the compact atlas fills up, sprites without a slot wait in a queue. Under
@@ -77,6 +79,11 @@ are drawn from the reduced atlas. A large queue of far sprites is normal when
 the compact atlas is smaller than the view needs. To test this, launch with
 `-Dloadsoflods.compactSize=8192` (texels, default 16384) and watch the F3
 "Near sparse atlas" line and the `Slot pressure:` debug log lines.
+
+For diagnosing non-terrain rendering, `-Dloadsoflods.diagnosticLowNonTerrain=true`
+temporarily routes non-terrain block-atlas draws through the reduced atlas in
+compact mode. This is a diagnostic only: held and dropped blocks may appear
+lower-resolution. Remove the flag after testing.
 
 ### Reduced-atlas disk cache
 
