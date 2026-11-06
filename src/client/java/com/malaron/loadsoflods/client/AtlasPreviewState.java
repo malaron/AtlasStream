@@ -496,6 +496,26 @@ public final class AtlasPreviewState {
 		);
 	}
 
+	public static void recordFrameMesh(net.fabricmc.fabric.api.client.renderer.v1.mesh.Mesh mesh) {
+		TextureAtlas atlas = previewedAtlas;
+		if (atlas == null || nearAtlas == null || !SodiumLodBridge.isIrisShaderPackInUse()) {
+			return;
+		}
+		var finder = ((net.fabricmc.fabric.api.client.renderer.v1.sprite.FabricTextureAtlas) atlas).spriteFinder();
+		Set<net.minecraft.client.renderer.texture.TextureAtlasSprite> sprites = new java.util.HashSet<>();
+		mesh.forEach(quad -> {
+			if (quad.atlas() == net.fabricmc.fabric.api.client.renderer.v1.mesh.QuadAtlas.BLOCK) {
+				var sprite = finder.find(quad);
+				if (sprite != null) {
+					sprites.add(sprite);
+				}
+			}
+		});
+		for (var sprite : sprites) {
+			recordSpriteUsage(sprite);
+		}
+	}
+
 	public static boolean isNearAtlasWarm() {
 		NearAtlas near = nearAtlas;
 		return near == null || !near.isUsable() || near.isWarm();

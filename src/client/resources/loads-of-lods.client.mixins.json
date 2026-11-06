@@ -5,8 +5,10 @@
 	"client": [
 		"AbstractTextureAccessor",
 		"AbstractTexturePreviewMixin",
+		"BlockModelRenderStateAccessor",
 		"BlockModelSpriteUsageMixin",
 		"ChunkVertexConsumerMixin",
+		"ExtendedBlockModelSubmitMixin",
 		"FirstPersonItemSpriteMixin",
 		"GuiItemAtlasMixin",
 		"GuiPictureItemMixin",
@@ -14,6 +16,7 @@
 		"IrisAtlasPbrLoaderMixin",
 		"IrisPbrAtlasAnimationMixin",
 		"IrisPbrAtlasLookupMixin",
+		"ItemFrameSpriteUsageMixin",
 		"PipelineCacheMixin",
 		"PreparedItemVirtualTextureMixin",
 		"SpriteAnimationStateAccessor",
