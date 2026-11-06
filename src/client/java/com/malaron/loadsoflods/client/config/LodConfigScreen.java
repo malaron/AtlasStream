@@ -85,7 +85,7 @@ final class LodConfigScreen {
 			.build();
 
 		Option<Integer> factorOption = Option.<Integer>createBuilder()
-			.name(Component.literal("Texture reduction"))
+			.name(Component.literal("Texture reduction (Requires texture reload F3+T)"))
 			.description(OptionDescription.of(Component.literal(
 				"How much the far/low block atlas is shrunk (1:N per axis). Higher saves more VRAM but looks blurrier. "
 					+ "Takes effect when the atlas is rebuilt; reload resource packs if LOD is already active."
