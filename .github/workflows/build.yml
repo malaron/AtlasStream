@@ -4,7 +4,17 @@
 # against bad commits.
 
 name: build
-on: [pull_request, push]
+
+on:
+  push:
+    branches:
+      - main
+      - release/*
+  pull_request:
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -22,7 +32,7 @@ jobs:
       - name: make gradle wrapper executable
         run: chmod +x ./gradlew
       - name: build
-        run: ./gradlew build
+        run: ./gradlew clean build
       - name: capture build artifacts
         uses: actions/upload-artifact@v7
         with:
