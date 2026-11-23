@@ -1633,15 +1633,35 @@ public final class AtlasRuntimeState {
 		if (sourceFrames.isEmpty()) {
 			throw new IOException("Animation contains no frames");
 		}
-		List<AnimationStep> steps = new ArrayList<>(sourceFrames.size());
+		long validMetadataFrameCount = sourceFrames.stream()
+			.filter(frame -> frame.index() >= 0 && frame.index() < frameCount
+				&& frame.timeOr(metadata.defaultFrameTime()) > 0)
+			.count();
+		List<AnimationFrame> validFrames = validAnimationFrames(
+			sourceFrames, frameCount, metadata.defaultFrameTime()
+		);
+		if (validMetadataFrameCount != sourceFrames.size()) {
+			AtlasStream.LOGGER.warn(
+				"Atlas animation {} contains {} invalid frame entries; using the {} valid entries",
+				sourceRegion.identifier(), sourceFrames.size() - validMetadataFrameCount, validMetadataFrameCount
+			);
+		}
+		if (validMetadataFrameCount == 0) {
+			AtlasStream.LOGGER.warn(
+				"Atlas animation {} has no valid metadata frames; using sequential frames",
+				sourceRegion.identifier()
+			);
+		}
+		List<AnimationStep> steps = new ArrayList<>(validFrames.size());
 		Map<Integer, List<NativeImage>> imagesByFrame = new HashMap<>();
 		try {
-			for (AnimationFrame frame : sourceFrames) {
+			for (AnimationFrame frame : validFrames) {
 				int frameIndex = frame.index();
 				int duration = frame.timeOr(metadata.defaultFrameTime());
 				if (frameIndex < 0 || frameIndex >= frameCount || duration <= 0) {
 					throw new IOException("Animation contains an invalid frame index or duration");
 				}
+
 				steps.add(new AnimationStep(frameIndex, duration));
 				if (!imagesByFrame.containsKey(frameIndex)) {
 					int frameX = frameIndex % columns * frameWidth;
@@ -1668,6 +1688,21 @@ public final class AtlasRuntimeState {
 			totalImageBytes[0] = initialImageBytes;
 			throw exception;
 		}
+	}
+
+	static List<AnimationFrame> validAnimationFrames(
+		List<AnimationFrame> sourceFrames, int frameCount, int defaultFrameTime
+	) {
+		List<AnimationFrame> valid = sourceFrames.stream()
+			.filter(frame -> frame.index() >= 0 && frame.index() < frameCount
+				&& frame.timeOr(defaultFrameTime) > 0)
+			.toList();
+		if (!valid.isEmpty()) {
+			return valid;
+		}
+		return java.util.stream.IntStream.range(0, frameCount)
+			.mapToObj(AnimationFrame::new)
+			.toList();
 	}
 
 	private static List<NativeImage> createAnimationFrameMipLevels(
