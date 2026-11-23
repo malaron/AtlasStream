@@ -1864,12 +1864,14 @@ public final class AtlasRuntimeState {
 				+ placement.sprite().height() + placement.sprite().paddingY();
 			for (int cellY = Math.floorDiv(sourceY, cell); cellY <= Math.floorDiv(sourceEndY - 1, cell); cellY++) {
 				for (int cellX = Math.floorDiv(sourceX, cell); cellX <= Math.floorDiv(sourceEndX - 1, cell); cellX++) {
-					remap.setPixel(
+					writeRemapPixel(
+						remap,
 						cellX * 3,
 						cellY,
 						packBytes(sourceX & 0xFF, sourceX >>> 8, sourceY & 0xFF, sourceY >>> 8)
 					);
-					remap.setPixel(
+					writeRemapPixel(
+						remap,
 						cellX * 3 + 1,
 						cellY,
 						packBytes(
@@ -1879,7 +1881,8 @@ public final class AtlasRuntimeState {
 							(placement.y() + placement.paddingY()) >>> 8
 						)
 					);
-					remap.setPixel(
+					writeRemapPixel(
+						remap,
 						cellX * 3 + 2,
 						cellY,
 						packBytes(Integer.numberOfTrailingZeros(placement.factor()) + 1, 0, 0, 1)
@@ -1888,16 +1891,20 @@ public final class AtlasRuntimeState {
 			}
 		}
 		int headerY = cellsY;
-		remap.setPixel(0, headerY, packBytes(
+		writeRemapPixel(remap, 0, headerY, packBytes(
 			(layout.width() - 1) & 0xFF, (layout.width() - 1) >>> 8,
 			(layout.height() - 1) & 0xFF, (layout.height() - 1) >>> 8
 		));
-		remap.setPixel(1, headerY, packBytes(
+		writeRemapPixel(remap, 1, headerY, packBytes(
 			(sourceWidth - 1) & 0xFF, (sourceWidth - 1) >>> 8,
 			(sourceHeight - 1) & 0xFF, (sourceHeight - 1) >>> 8
 		));
-		remap.setPixel(2, headerY, packBytes(cell & 0xFF, cell >>> 8, 0, 1));
+		writeRemapPixel(remap, 2, headerY, packBytes(cell & 0xFF, cell >>> 8, 0, 1));
 		return remap;
+	}
+
+	static void writeRemapPixel(NativeImage image, int x, int y, int packedRgba) {
+		image.setPixelABGR(x, y, packedRgba);
 	}
 
 	private static int packBytes(int r, int g, int b, int a) {

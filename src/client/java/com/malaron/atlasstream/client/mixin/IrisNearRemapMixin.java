@@ -124,7 +124,7 @@ vec2 atlasStreamLowRemap(vec2 uv) {
 vec2 atlasStreamAtlasRemap(vec2 uv, vec2 anchor) {
     ivec2 remapSize = textureSize(u_AtlasStreamNearRemap, 0);
     if (remapSize.x <= 1) {
-        return uv;
+        return atlasStreamLowRemap(uv);
     }
     vec4 header0 = texelFetch(u_AtlasStreamNearRemap, ivec2(0, remapSize.y - 1), 0);
     ivec2 compactSize = ivec2(
@@ -132,7 +132,7 @@ vec2 atlasStreamAtlasRemap(vec2 uv, vec2 anchor) {
         floor(header0.b * 255.0 + 0.5) + floor(header0.a * 255.0 + 0.5) * 256.0
     ) + 1;
     if (textureSize(gtexture, 0) != compactSize) {
-        return uv;
+        return atlasStreamLowRemap(uv);
     }
     return atlasStreamLowRemap(atlasStreamNearRemap(uv, anchor));
 }
