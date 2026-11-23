@@ -49,9 +49,7 @@ public abstract class PreparedItemVirtualTextureMixin {
 			&& Identifier.withDefaultNamespace("core/item").equals(pipeline.getShaders().get(ShaderType.FRAGMENT));
 		boolean blockAtlas = textures().stream().anyMatch(texture -> texture.name().equals("Sampler0")
 			&& AtlasRuntimeState.isReducedBlockAtlasView(texture.textureView()));
-		if (!AtlasRuntimeState.isDistancePreviewEnabled()
-				|| SodiumTerrainIntegration.isIrisShaderPackInUse()
-				|| !itemShader || !blockAtlas) {
+		if (!AtlasRuntimeState.isDistancePreviewEnabled() || !itemShader || !blockAtlas) {
 			if (itemShader) {
 				ItemStreamDiagnostics.recordDraw(name() + (blockAtlas ? " reduced" : " other-atlas"));
 			}
@@ -74,8 +72,9 @@ public abstract class PreparedItemVirtualTextureMixin {
 			return RenderSystem.getCompiledPipeline(pipeline);
 		}
 		atlasStream$virtualItem = true;
-		atlasStream$streamTiles = AtlasRuntimeState.useVirtualTextureForItemDraw();
-		ItemStreamDiagnostics.recordDraw(name() + " virtual");
+		atlasStream$streamTiles = AtlasRuntimeState.useVirtualTextureForItemDraw()
+			&& !SodiumTerrainIntegration.isIrisShaderPackInUse();
+		ItemStreamDiagnostics.recordDraw(name() + (atlasStream$streamTiles ? " virtual" : " remapped"));
 		return compiled;
 	}
 
