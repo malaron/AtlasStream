@@ -1,26 +1,26 @@
 {
 	"schemaVersion": 1,
-	"id": "loads-of-lods",
+	"id": "atlasstream",
 	"version": "${version}",
-	"name": "Loads of Lods",
-	"description": "A client-side texture LOD prototype for large resource packs.",
-	"license": "CC0-1.0",
-	"icon": "assets/loads-of-lods/icon.png",
+	"name": "AtlasStream",
+	"description": "Scalable texture-atlas streaming for oversized Minecraft resource packs with Sodium and Iris/PBR support.",
+	"license": "All-Rights-Reserved",
+	"icon": "assets/atlasstream/icon.png",
 	"environment": "*",
 	"entrypoints": {
 		"main": [
-			"com.malaron.loadsoflods.LoadsOfLods"
+			"com.malaron.atlasstream.AtlasStream"
 		],
 		"client": [
-			"com.malaron.loadsoflods.client.LoadsOfLodsClient"
+			"com.malaron.atlasstream.client.AtlasStreamClient"
 		],
 		"modmenu": [
-			"com.malaron.loadsoflods.client.config.LoadsOfLodsModMenu"
+			"com.malaron.atlasstream.client.config.AtlasStreamModMenu"
 		]
 	},
 	"mixins": [
 		{
-			"config": "loads-of-lods.client.mixins.json",
+			"config": "atlasstream.client.mixins.json",
 			"environment": "client"
 		}
 	],

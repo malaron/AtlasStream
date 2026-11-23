@@ -12,7 +12,7 @@ loom {
 	splitEnvironmentSourceSets()
 
 	mods {
-		"loads-of-lods" {
+		"atlasstream" {
 			sourceSet sourceSets.main
 			sourceSet sourceSets.client
 		}
@@ -41,11 +41,11 @@ tasks.named("test", Test).configure {
 }
 
 tasks.register("buildLodAtlases", JavaExec) {
-	group = "loads-of-lods"
+	group = "atlasstream"
 	description = "Build matching high- and low-resolution atlases from a resource pack"
 	dependsOn tasks.named("classes")
 	classpath = sourceSets.main.runtimeClasspath
-	mainClass = "com.malaron.loadsoflods.atlas.AtlasBuilder"
+	mainClass = "com.malaron.atlasstream.atlas.AtlasBuilder"
 	def resourcePack = providers.gradleProperty("resourcePack")
 	def atlasOutput = providers.gradleProperty("atlasOutput")
 		.orElse(layout.buildDirectory.dir("lod-atlases").map { it.asFile.absolutePath })

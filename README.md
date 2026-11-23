@@ -1,17 +1,87 @@
-# Loads of Lods
+# AtlasStream
 
-Loads of Lods is a client-side Minecraft mod prototype exploring distance-based
+AtlasStream is a client-side Minecraft mod for distance-based
 texture level of detail (LOD) for large resource packs.
 
-The prototype uses Sodium for terrain integration and optionally supports Iris
-shaderpacks. It prepares a reduced block atlas and streams nearby detail using
-different rendering paths with and without an active Iris shaderpack.
+It reduces the VRAM used by oversized block-texture atlases by:
+
+- Repacking a smaller, mixed-resolution low atlas for distant textures.
+- Keeping nearby textures at full resolution.
+- Streaming only the high-resolution tiles currently needed.
+- Preserving LabPBR normal/specular textures with Sodium and Iris.
+
+> [!IMPORTANT]
+> This project is currently tested primarily with Minecraft 26.3. Treat other
+> versions, resource packs, shader packs, GPUs and renderers as experimental
+> until explicitly listed in a release's compatibility notes.
+
+## Contents
+
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Transparency and licensing](#transparency-and-licensing)
+- [Configuration](#configuration)
+- [Commands](#commands)
+- [How it works](#how-it-works)
+- [Development](#development)
+- [License](#license)
+
+## Requirements
+
+- Minecraft 26.3
+- Fabric Loader 0.20.1
+- Fabric API
+- Sodium for distance-based terrain streaming and virtual/oversized atlas
+  handling
+- Iris and `GL_ARB_sparse_texture` for full sparse near-atlas behavior
+- Optional: Mod Menu and Yet Another Config Lib for the configuration screen
+
+Compatibility notes and known issues are tracked in [BUGS.md](./BUGS.md).
+
+## Quick start
+
+1. Install the AtlasStream JAR with Fabric API. Add Sodium for distance-based
+   streaming and oversized virtual-atlas handling; Iris is optional.
+2. Join a world.
+3. Let the initial atlas build complete, or run
+   `/atlasstream preview-distance`.
+4. Open the Mod Menu configuration screen to set:
+   - high-resolution distance,
+   - cache budget,
+   - low-atlas target resolution.
+5. Use F3+T after changing a setting that affects atlas construction.
+6. Use `/atlasstream vram`, `/atlasstream cache`, and `/atlasstream near-debug`
+   if you need to investigate performance or missing detail.
+
+Without Sodium, AtlasStream can still build and preview a normal, GPU-sized
+reduced atlas with `/atlasstream preview-low`. The current virtual-atlas path
+for packs larger than the GPU's atlas limit requires Sodium.
+
+## Transparency and licensing
+
+AtlasStream was developed with substantial AI assistance. This repository and
+its commit history are published so users can inspect how the project works and
+make an informed decision about using it.
+
+This is source-visible software, not an open-source distribution license.
+Personal, non-commercial use and private modification are allowed, but public
+redistribution or repackaging—including uploads to Modrinth, CurseForge,
+GitHub Releases, mirrors, or public modpacks—is not permitted without written
+permission. See [LICENSE](./LICENSE) for the complete terms.
+
+Only builds published through AtlasStream's official release channel should be
+treated as official. If you encounter AtlasStream published elsewhere, verify
+the attribution and release source before using it.
+
+AtlasStream integrates with Sodium for terrain streaming and optionally with
+Iris shaderpacks. Vanilla rendering can use the reduced-atlas preview; the
+current oversized virtual-atlas path and distance streaming require Sodium.
 
 Reported issues and deferred investigations are tracked in [BUGS.md](./BUGS.md).
 
-## Current status
+## How it works
 
-The current prototype provides:
+At a high level, AtlasStream provides:
 
 - Minecraft 26.3 and Fabric setup.
 - A client configuration file for the high-resolution distance and hysteresis.
@@ -22,8 +92,11 @@ The current prototype provides:
 - A reduced-atlas preview and a streamed distance mode that can release the
   original full-resolution block-atlas GPU allocation.
 
-`/lods preview-low` switches terrain to the reduced atlas for visual testing.
-`/lods preview-distance` enables distance-based albedo LOD. Without an active
+<details>
+<summary><strong>Rendering paths and transparency behavior</strong></summary>
+
+`/atlasstream preview-low` switches terrain to the reduced atlas for visual testing.
+`/atlasstream preview-distance` enables distance-based albedo LOD. Without an active
 Iris shaderpack, Sodium terrain samples resident high-resolution tiles where
 available and uses the reduced atlas on cache misses;
 the full high-resolution block-atlas GPU allocation is released. Held and
@@ -34,6 +107,14 @@ restores the original atlas when it fits; oversized virtual layouts use a
 placeholder until the streamed atlas is rebuilt. Cached inventory item images
 are refreshed when the reduced atlas becomes ready, so temporary placeholder
 colors do not persist.
+Every persisted option exposed by the Mod Menu configuration screen is also
+available under `/atlasstream config`: distance in chunks, hysteresis in blocks,
+cache budget in MiB, low-atlas sprite target resolution, low-resolution debug tint, and
+enable-on-launch. Run `/atlasstream config` without arguments to print the saved
+values. The UI and commands share the same boundaries and allowed target
+resolutions; settings changed by command are saved to the same configuration file.
+Use `/atlasstream config target-resolution <16|32|64|128|256>` to change the low-atlas
+sprite target from chat.
 With an Iris shaderpack active, the reduced atlas (albedo
 plus normal/specular LabPBR maps, averaged per channel to the same ratio) serves
 distant terrain, and a full-size or compact sparse "near atlas" (needs
@@ -50,6 +131,18 @@ streamed from the resource pack on worker threads; PBR maps stay vanilla
 (first frame only) while albedo animates, interpolated like vanilla, but only
 for sprites used by sections that are in range and in view. When setting the distance to 0
 chunks, everything uses the low atlas and nothing animates in the near atlas.
+For near albedo sprites with both fully and partly transparent pixels and the
+automatic mip strategy, near albedo mip alpha is averaged from source coverage
+instead of using cutout-coverage scaling and bias. This avoids raising fully
+transparent areas above translucent shader cutoffs and preserves averaged
+partial transparency. Mip RGB, explicit mip strategies and normal/specular
+maps are unchanged.
+Set `-Datlasstream.preserveTransparentMips=false` before launch to disable this
+correction for comparison.
+Some shaderpacks also refract partially transparent terrain. To reduce blur on
+resource-pack foliage overlays, Sodium terrain uses a default-on geometric
+heuristic to render certain translucent overlays as cutout; see the overlay
+pass commands below for limitations and comparison.
 The mod registers the atlases with Iris's texture tracker so Iris still finds
 them. With an active Iris near atlas, translucent terrain is also split by
 distance. Animated low-atlas sprites follow Minecraft's frame sequence
@@ -58,6 +151,11 @@ and combined with their owning region coordinates before applying the
 world-space distance policy. Sodium's per-region batches are rebuilt from each
 filtered section list before drawing, invalidating only the active terrain pass
 so other prepared passes remain cached.
+
+</details>
+
+<details>
+<summary><strong>Oversized packs and compact near-atlas behavior</strong></summary>
 
 ### Oversized packs: compact near atlas
 
@@ -74,31 +172,69 @@ patched. The same remap is applied to the vanilla (non-terrain) shaders, guarded
 by the bound texture size, so held blocks, falling blocks and particles are
 full-resolution too. Where Iris supplies a midpoint UV, non-terrain remapping
 uses it to select the sprite slot and remaps the midpoint for shaders' parallax
-calculations. With Iris, translucent terrain (glass) is split by distance
-so near glass also uses the near atlas.
+calculations. Fabric mesh sprites in item frames, minecart display blocks and
+primed TNT are requested for the near atlas when drawn. With Iris, translucent
+terrain (glass) is split by distance so near glass also uses the near atlas.
 
 If the compact atlas fills up, sprites without a slot wait in a queue. Under
-pressure the farthest resident sprites are evicted, matched by slot size, to
-make room for the nearest waiting ones, and evicted-but-still-needed sprites
-rejoin the queue behind nearer ones. Sections whose sprites are not all resident
+pressure sprites used in sections within four blocks of the camera, a section up to 12 blocks
+ahead in the horizontal direction of movement, and recently drawn items,
+entities and particles are prioritized over other sections. The movement
+direction is retained briefly when stopping. Among sprites of
+the same priority, residents are evicted only when a waiting sprite is more
+than eight blocks nearer. A freed slot can be split for smaller sprites and
+adjacent free rectangles can merge again; evictions can use any slot large
+enough. Still-needed evicted sprites rejoin the queue. Sections whose sprites are not all resident
 are drawn from the reduced atlas. A large queue of far sprites is normal when
 the compact atlas is smaller than the view needs. To test this, launch with
-`-Dloadsoflods.compactSize=8192` (texels, default 16384) and watch the F3
+`-Datlasstream.compactSize=8192` (texels, default 16384) and watch the F3
 "Near sparse atlas" line and the `Slot pressure:` debug log lines.
+Evicted sprites release only pages no remaining sprite references. Adjacent
+pages are decommitted in rectangular batches to reduce driver calls without
+keeping extra pages committed.
+Compact requests and completed uploads are prioritized by proximity rather than
+the order in which chunks were built. Distances use the same section bounding
+boxes as the rendering policy. Already-started work is not preempted, and
+neither this ordering nor prefetching guarantees a fully resolved section when
+the atlas is full or streaming cannot keep up.
+Compact sprite preparation and uploads each use a roughly 4 ms per-tick
+render-thread budget, allowing at least one operation in each phase for
+progress. Individual operations can exceed that budget, and spreading work
+over ticks can delay sharpening when there is a backlog.
+
+#### Experimental hybrid compact atlas
+
+The mixed-resolution low atlas cannot use the layout-based hybrid fallback,
+because that fallback relied on one global division of every sprite coordinate.
+For repacked low atlases, `-Datlasstream.hybridCompact=true` uses the regular
+compact near-atlas streaming path; this is logged at activation.
+The JVM option's previous layout-based fallback remains under development and
+will need a second remap-capable fallback path before it can be restored.
+
+Nearby requests remain prioritized, but insufficient capacity or slow uploads
+can cause nearby misses while a sprite waits for a compact slot. Mipmap
+filtering, parallax, transparency, animations and shader-pack compatibility
+still need in-game verification.
+
+</details>
 
 ### Compatibility
 
-Distance-based terrain rendering requires Sodium. The development and recent
+Distance-based terrain streaming and oversized virtual-atlas stitching require
+Sodium. The development and recent
 in-game regression tests used Minecraft 26.3, Fabric Loader 0.20.1, Sodium
 0.9.2, and Iris 1.11.7, including Kappa and Photon shaderpacks. Other renderer,
 shaderpack, GPU, and platform combinations need independent testing; a passing
 build alone does not establish compatibility. Sparse near atlases require
 `GL_ARB_sparse_texture`; without it, Iris terrain uses the reduced atlas.
 
+<details>
+<summary><strong>Reduced-atlas disk cache</strong></summary>
+
 ### Reduced-atlas disk cache
 
 Building the reduced atlas (and its PBR maps) takes tens of seconds for large
-packs, so the result is cached in `cache/loads-of-lods/<key>.bin` under the game
+packs, so the result is cached in `cache/atlasstream/<key>.bin` under the game
 directory. The key is a hash of the mod build, loaded mods, atlas layout,
 settings and the ordered resource pack stack, including each pack's size and
 modification time. Changing a pack, its order or any mod changes the key, so a
@@ -108,7 +244,7 @@ fingerprinted (for example server packs) skip the cache. Entries are checksummed
 animation data is always rebuilt from the packs. On a cache hit the log shows
 "Loaded the reduced atlas from the disk cache".
 
-A second, per-pack cache (`cache/loads-of-lods/tiles/`) stores each reduced
+A second, per-pack cache (`cache/atlasstream/tiles/`) stores each reduced
 sprite tile under the pack that provided its texture (keyed by that pack's size
 and modification time, or the mod version). When the pack stack changes, only
 sprites whose providing pack changed are decoded again; the rest are copied from
@@ -116,53 +252,126 @@ the tile files and the mip levels are rebuilt. Animated sprites and sprites from
 packs that cannot be fingerprinted are always decoded. The log line
 "Tile cache (...)" shows how many sprites came from cached tiles.
 
+</details>
+
 ## Configuration
 
-On first launch the mod creates `config/loads-of-lods.properties`:
+On first launch the mod creates `config/atlasstream.properties`:
 
 ```properties
 highResolutionDistance=128.0
 hysteresis=16.0
 highResolutionCacheMiB=1024
-downscaleFactor=4
+targetResolution=64
 ```
 
-`downscaleFactor` (2, 4 or 8) is the per-axis reduction of the low-resolution
-atlas, including Iris's normal/specular atlases. Larger values save more VRAM;
-1:2 uses roughly 4x the atlas VRAM of 1:4. It applies the next time the
-distance preview is built (it is rebuilt automatically after a resource reload, e.g. F3+T), as does
-`debugTintLowResolution` (tints low-res terrain magenta for testing).
-`highResolutionDistance` is stored in blocks but edited in chunks in the
-config screen; 0 disables near terrain entirely.
-`enableOnLaunch` (default `true`) builds the reduced atlas automatically after
-the game starts. With Iris shaders enabled, the CPU build (including the reduced
-PBR images) starts right after the launch resource reload, Iris's full-size block
-PBR load is skipped, and the GPU activation is parked until you join a world and
-Iris has created its pipeline. Without Iris shaders it activates once the first
-terrain shader has compiled. Set it to `false` to keep using `/lods preview-distance` manually.
+| Setting | Default | Meaning |
+|---|---:|---|
+| `highResolutionDistance` | 128 blocks | Distance at which nearby textures use full resolution. The UI shows chunks; `0` disables near textures. |
+| `hysteresis` | 16 blocks | Dead band before switching back between near and far detail. |
+| `highResolutionCacheMiB` | 1024 MiB | Tile-cache limit without Iris; soft near-atlas budget with Iris. Allowed range: 64–16384 MiB. |
+| `targetResolution` | 64 | Maximum low-atlas sprite dimension: 16, 32, 64, 128 or 256. Smaller sprites are not upscaled. |
+| `debugTintLowResolution` | false | Tints low-resolution terrain magenta for comparison. |
+| `enableOnLaunch` | true | Builds and activates streamed mode automatically. Takes effect after restart. |
 
 All settings can be edited in game via Mod Menu (21.0.0 for 26.3) when Yet
 Another Config Lib is installed; both are optional. To activate distance-based
 LOD manually, join a world, save any pending settings, and use **Activate** in
-the Loads of Lods settings. The screen closes and progress or errors appear in
+the AtlasStream settings. The screen closes and progress or errors appear in
 chat. The button shows **Active** and is disabled while LOD is already enabled.
 Reload resource packs to rebuild the atlas after changing texture reduction or
-debug tint. `/lods preview-distance`
-remains available as a command. `/lods vram` prints a VRAM
-report, and an F3 debug entry shows the current mode, factor and atlas state.
+debug tint.
 
-Distances are in blocks. A section is initially classified as high resolution
-when its bounding box is within the configured distance. Once classified, it
-switches to low resolution only beyond `distance + hysteresis`, and switches
-back inside `distance - hysteresis`, or half the configured distance if that
-would be larger. This keeps a usable near range even when hysteresis equals the
-distance. The dead band avoids repeated
-switches near the boundary in the Iris section-split path. In the non-Iris
-virtual-texture path, residency is determined per tile instead.
-`highResolutionCacheMiB` accepts 64-16384 MiB. Without Iris it bounds the
-high-resolution GPU tile cache, subject to atlas and GPU size limits. With
-Iris it is a soft target for committed near-atlas memory; needed sprites can
-keep it above that target.
+<details>
+<summary><strong>Configuration behavior and hysteresis details</strong></summary>
+
+`targetResolution` applies to albedo and Iris normal/specular atlases. Larger
+sprites are reduced with area averaging; smaller sprites remain at their
+original resolution and are never upscaled. The reduced sprites are repacked,
+and a remap texture preserves Minecraft's original atlas UVs.
+
+When `enableOnLaunch` is enabled, Iris's full-size PBR loading is replaced by
+the reduced build while shaders initialize. GPU activation waits until a world
+and Iris pipeline are ready.
+
+A section remains high resolution until it crosses `distance + hysteresis`, and
+switches back inside `distance - hysteresis` or half the configured distance,
+whichever is larger. This dead band prevents visible boundary flicker.
+
+Without Iris, the cache limit bounds the GPU tile cache, subject to atlas and
+GPU size limits. With Iris, it is a soft target: the current working set may
+temporarily exceed it.
+
+</details>
+
+## Commands
+
+| Command | Purpose |
+|---|---|
+| `/atlasstream preview-distance` | Build/activate distance-based streamed mode. |
+| `/atlasstream preview-low` | Preview only the reduced atlas without releasing the original. |
+| `/atlasstream preview-high` | Return a low-atlas preview to the original atlas. |
+| `/atlasstream config` | Print current persisted settings. |
+| `/atlasstream config distance <chunks>` | Set high-resolution distance. |
+| `/atlasstream config target-resolution <pixels>` | Set low-atlas target resolution. |
+| `/atlasstream config hysteresis <blocks>` | Set transition dead band. |
+| `/atlasstream config cache <mib>` | Set cache budget. |
+| `/atlasstream config debug-tint <true\|false>` | Toggle low-resolution tinting. |
+| `/atlasstream config enable-on-launch <true\|false>` | Toggle automatic activation. |
+| `/atlasstream vram` | Print GPU and atlas VRAM information. |
+| `/atlasstream cache` | Print streaming/cache status. |
+| `/atlasstream near-debug` | Report near-atlas misses and slot pressure. |
+
+<details>
+<summary><strong>Advanced diagnostic and comparison commands</strong></summary>
+
+`/atlasstream vram` prints a VRAM report, and an F3 debug entry shows the
+current mode and atlas state. With Iris, `/atlasstream near-debug` reports
+missing near-atlas sprites and targeted block sections, writes details to the
+log, and includes slot-pressure information.
+`/atlasstream sprite-alpha minecraft:block/poppy` compares selected source, original CPU
+mip, expected near upload and resident GPU alpha values for a static sprite. This diagnostic
+synchronously reads GPU pixels and can briefly hitch; its output is also
+written to the game log. It does not measure shader filtering or alpha-test state.
+`/atlasstream terrain-alpha` records the active OpenGL program and alpha-test uniforms
+after terrain batch draws for five seconds, plus diffuse/remap sampler bindings
+and their mip limits. The output is written to the log; it does not identify
+which blocks are in each batch or measure per-fragment alpha.
+For a controlled plant transparency comparison with Sodium, look at an affected
+block and run `/atlasstream plant-pass cutout`. Translucent terrain quads for that block
+type temporarily use the cutout pass; `/atlasstream plant-pass normal` ends this
+override, while the independent flower and overlay settings still apply.
+Select another block with the cutout command to switch targets.
+Both commands schedule terrain rebuilding and log each distinct matching quad
+layer and its selected layer. This experiment does not change texture data,
+other blocks, or item rendering; it resets to normal when the game restarts.
+The default-on geometry-based overlay correction changes only translucent,
+upward-facing horizontal quads immediately above a solid block, with a bounded
+footprint; it does not change every translucent quad on that block. It is a
+heuristic, not a way to determine the pack author's intent: matching overlays
+lose soft transparency and might include intentionally translucent effects.
+It applies to Sodium terrain with or without shaders, independently of the
+LOD preview. The first matching block IDs and quad heights are logged. Use
+`/atlasstream overlay-pass normal` to disable it for the current game session, and
+`/atlasstream overlay-pass cutout` to re-enable it; it is enabled again after restart.
+Each change reloads Sodium terrain and may briefly interrupt rendering; the
+plant-pass experiment is independent and can still override its target.
+By default, translucent terrain quads of blocks in Minecraft's `small_flowers`
+tag use cutout, including any additions to that tag. This applies with Sodium
+both with and without shaders, independently of LOD preview. Matching quads
+lose soft transparency, and the tag does not include every plant. Use
+`/atlasstream flower-pass normal` to disable it for the current game session, or
+`/atlasstream flower-pass cutout` to re-enable it; it is enabled again after restart.
+Each change reloads Sodium terrain. The independent plant-pass experiment can
+still override its selected block.
+With Iris and an active near atlas, `/atlasstream near-mip-test base` temporarily limits
+near terrain albedo sampling to mip level 0 without changing Minecraft's mipmap
+setting or reloading resources. It affects all nearby terrain and may cause
+shimmering; PBR and distant fallback textures are unchanged. Restore normal
+sampling with `/atlasstream near-mip-test normal`. Rebuilding the near atlas or
+restarting the game also resets the test.
+
+</details>
 
 ## Development
 
@@ -171,17 +380,41 @@ keep it above that target.
 - Java: 25
 - Fabric API: see `gradle.properties`
 
-Build with `.\gradlew.bat build` on Windows. To test against the resource packs
+### Code organization
+
+- `atlas` — atlas construction and image/PBR processing.
+- `lod` — configuration and section-distance policy.
+- `render` — terrain-layer correction policies.
+- `shader` — shader source patching.
+- `streaming` — renderer-independent layout, residency and request handling.
+- `client.atlas` — runtime atlas construction and near atlas.
+- `client.streaming` — GPU cache and item-pipeline integration.
+- `client.sodium` — Sodium terrain integration.
+- `client.diagnostics` — runtime diagnostics and reports.
+- `client.command` — `/atlasstream` commands.
+- `client.mixin` — compatibility hooks into Minecraft, Sodium and Iris.
+
+Build and run all tests with:
+
+```powershell
+.\gradlew.bat clean build
+```
+
+<details>
+<summary><strong>Detailed renderer implementation notes</strong></summary>
+
+To test against the resource packs
 currently loaded by Minecraft, install the resulting mod jar, enter a world,
-and run `/lods preview-low` to build and select a second GPU block atlas with
-the same normalized sprite UV layout as Minecraft's atlas. The low atlas is
-physically downscaled by the configured factor (2, 4, or 8 per dimension);
-the scale is reduced if the stitched sprite layout is not aligned for exact
-UV preservation. For a non-virtual atlas that has not been released, run
-`/lods preview-high` to switch back to the untouched original atlas without
-reloading resource packs after `/lods preview-low`; the generated low atlas
+and run `/atlasstream preview-low` to build and select a second GPU block atlas.
+Each sprite is independently reduced to at most the configured target
+resolution and the reduced sprites are repacked. Original sprite UVs are
+preserved by a low-atlas remap texture, while sprites already below the target
+are copied without upscaling. For a non-virtual atlas that has not been
+released, run
+`/atlasstream preview-high` to switch back to the untouched original atlas without
+reloading resource packs after `/atlasstream preview-low`; the generated low atlas
 stays resident for a quick switch back. This low-only preview does not reduce
-total VRAM usage. `/lods preview-distance` instead activates streamed mode and
+total VRAM usage. `/atlasstream preview-distance` instead activates streamed mode and
 releases the original full-resolution block atlas. A resource reload restores
 the original atlas when it fits and then rebuilds streamed mode automatically;
 oversized virtual layouts instead use a placeholder. The low-atlas CPU mip
@@ -190,10 +423,10 @@ Mip levels follow the reduced atlas and are generated within each sprite's
 padded bounds to avoid sampling neighboring sprites.
 A resource-pack reload discards the cached low atlas. If the distance preview
 was on, it is rebuilt automatically about a second after the reload (this
-also picks up a changed `downscaleFactor` or debug tint), so no command is
-needed. A manual `/lods preview-distance` is only needed if that rebuild is
+also picks up a changed `targetResolution` or debug tint), so no command is
+needed. A manual `/atlasstream preview-distance` is only needed if that rebuild is
 skipped (see `latest.log`).
-Run `/lods preview-distance` to enable streamed terrain detail. Without an
+Run `/atlasstream preview-distance` to enable streamed terrain detail. Without an
 active Iris shaderpack, virtual tiles are sampled where resident, with the
 reduced atlas as fallback. With an active Iris shaderpack, sections switch
 between the reduced atlas and a sparse near atlas; the reduced albedo and PBR
@@ -210,7 +443,7 @@ Animated albedo sprites follow
 Minecraft's frame sequence and interpolation state; animation frame caches
 share the CPU image safety limit. Previously blended low-atlas animation frames
 are reused in a separate cache of up to 32 MiB of CPU memory, cleared on atlas
-reload. `/lods perf start` reports how many blends were built or reused during
+reload. `/atlasstream perf start` reports how many blends were built or reused during
 its CPU sample, along with near-atlas refresh time. The repeating Nether portal
 sprite's opposite edges are matched at each low-atlas mip level to reduce visible
 seams between adjacent portal blocks after downscaling.
@@ -275,7 +508,7 @@ and prefer finer mip levels at the same distance. New nearby requests can pass
 older prefetch work rather than waiting behind it.
 Enabling distance preview schedules loaded Sodium
 terrain for remeshing so already-built sections also generate initial requests.
-`/lods cache` includes a lifetime count of completed UV quads to distinguish
+`/atlasstream cache` includes a lifetime count of completed UV quads to distinguish
 an empty request queue from a capture hook that is not running. Without Iris, tiles are
 requested for sections within `highResolutionDistance + hysteresis + 32` blocks and
 for recently drawn block-atlas item models;
@@ -291,29 +524,31 @@ for near terrain. With Iris, the PBR atlases are reduced as well; without
 Iris there are none, so the saving is the albedo atlas. Without an active
 shaderpack, other consumers of Minecraft's shared block atlas, including GUI
 icons, see the low-resolution fallback while streamed mode is active.
-Use `/lods cache` during `/lods preview-distance` to see resident-tile and
+Use `/atlasstream cache` during `/atlasstream preview-distance` to see resident-tile and
 pending-request counts.
 To diagnose a low-resolution held item, hold it with shaders off and use
-`/lods item-debug`. The report lists recently drawn first-person sprites,
+`/atlasstream item-debug`. The report lists recently drawn first-person sprites,
 their block-cache tile residency by mip level, and recent item draw paths;
 it is also written to the game log. The command monitors those sprites and
 cache evictions for 30 seconds to help diagnose intermittent fallback.
-Use `/lods perf start` and hold a steady camera view. The sample stops
-automatically after 30 seconds and reports CPU time spent building both
-filtered section lists, preparing Sodium batches, and submitting the split draws. Sections are
-classified once while both lists are built. Section classifications are cached
+Use `/atlasstream perf start` and hold a steady camera view. The sample stops
+automatically after 30 seconds and reports render-thread time spent building both
+filtered section lists, preparing Sodium batches, submitting split draws, refreshing near-atlas
+demand, handling slot pressure, and starting and finishing near sprite uploads.
+It also reports sparse pages released and decommit calls during the sample.
+Sections are classified once while both lists are built. Section classifications are cached
 in a bounded per-region table and reused across terrain passes while the
 camera remains in the same quarter-block cell. Classification uses that cell's
 center, limiting its positional approximation to 0.125 blocks per axis.
 The visible-section scan uses cached method handles for Sodium's iterator and
 filtered-list operations to avoid reflective dispatch in the per-section loop.
 Prepare timings exclude any lazy list-filtering work they trigger. These
-measurements exclude GPU execution and are useful for comparing repeated runs
+measurements can include driver waits but exclude GPU execution and are useful for comparing repeated runs
 from the same camera position and render settings; they are not total
 frame-time measurements.
-Run `/lods build-atlases` to create the separate generated atlas pages and
+Run `/atlasstream build-atlases` to create the separate generated atlas pages and
 manifest. Those files are written to
-`config/loads-of-lods/generated/`; the game reports the manifest path or an
+`config/atlasstream/generated/`; the game reports the manifest path or an
 explicit error in chat and the log.
 
 The standalone builder task is also available for development using an
@@ -346,6 +581,14 @@ because the combined atlas would exceed that limit. Individual texture frames
 that exceed the per-page limit are warned about and skipped; a build fails only
 if no usable block textures remain or the output itself cannot be written.
 
+</details>
+
 ## License
 
-This project currently uses the CC0-1.0 license.
+AtlasStream uses the **AtlasStream Personal Source License**, which allows
+personal, non-commercial use and private modification while reserving public
+redistribution rights. It is not an open-source license. See
+[LICENSE](./LICENSE) for the full terms.
+
+The project owner may change the license for future releases. Versions already
+received remain subject to the license included with that version.

@@ -1,0 +1,31 @@
+package com.malaron.atlasstream.client.mixin;
+
+import com.malaron.atlasstream.client.sodium.SodiumChunkMeshPriority;
+
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Pseudo;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+
+@Pseudo
+@Mixin(
+	targets = "net.caffeinemc.mods.sodium.client.render.chunk.compile.tasks.ChunkBuilderMeshingTask",
+	remap = false
+)
+public abstract class SodiumChunkBuildPriorityMixin {
+	private static final String MESH_EXECUTE_DESCRIPTOR =
+		"(Lnet/caffeinemc/mods/sodium/client/render/chunk/compile/ChunkBuildContext;"
+			+ "Lnet/caffeinemc/mods/sodium/client/util/task/CancellationToken;)"
+			+ "Lnet/caffeinemc/mods/sodium/client/render/chunk/compile/ChunkBuildOutput;";
+
+	@Inject(method = MESH_EXECUTE_DESCRIPTOR, at = @At("HEAD"), remap = false)
+	private void atlasStream$beginPriorityCapture(CallbackInfoReturnable<?> callback) {
+		SodiumChunkMeshPriority.begin(this);
+	}
+
+	@Inject(method = MESH_EXECUTE_DESCRIPTOR, at = @At("RETURN"), remap = false)
+	private void atlasStream$endPriorityCapture(CallbackInfoReturnable<?> callback) {
+		SodiumChunkMeshPriority.end();
+	}
+}
