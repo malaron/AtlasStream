@@ -9,6 +9,8 @@ It reduces the VRAM used by oversized block-texture atlases by:
 - Keeping nearby textures at full resolution.
 - Streaming only the high-resolution tiles currently needed.
 - Preserving LabPBR normal/specular textures with Sodium and Iris.
+- Caching reduced atlases and processed sprite tiles to speed up later
+  resource-pack reloads.
 
 > [!IMPORTANT]
 > This project is currently tested primarily with Minecraft 26.3. Treat other
@@ -76,6 +78,9 @@ the attribution and release source before using it.
 AtlasStream integrates with Sodium for terrain streaming and optionally with
 Iris shaderpacks. Vanilla rendering can use the reduced-atlas preview; the
 current oversized virtual-atlas path and distance streaming require Sodium.
+
+See [Reduced-atlas disk cache](#reduced-atlas-disk-cache) for cache behavior and
+invalidation details.
 
 Reported issues and deferred investigations are tracked in [BUGS.md](./BUGS.md).
 
