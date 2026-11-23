@@ -1,9 +1,11 @@
 # gradle
 
 .gradle/
+.kotlin/
 build/
 out/
 classes/
+target/
 
 # eclipse
 
@@ -23,19 +25,37 @@ classes/
 bin/
 .classpath
 .project
+*.swp
+*.swo
+*~
 
 # macos
 
 *.DS_Store
 
+# windows
+
+Thumbs.db
+Desktop.ini
+
 # fabric
 
 run/
 logs/
+crash-reports/
+screenshots/
 
-# java
+# local environment and credentials
+
+.env
+.env.*
+!.env.example
+local.properties
+
+# profiling and dumps
 
 hs_err_*.log
 replay_*.log
 *.hprof
 *.jfr
+*.log
