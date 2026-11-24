@@ -73,12 +73,13 @@ class LowAtlasPackerTest {
 	}
 
 	@Test
-	void doesNotPreserveOriginalLayoutWhenASpriteNeedsReduction() {
+	void reducesOversizedSpriteInOriginalLayout() {
 		LowAtlasPacker.Layout layout = LowAtlasPacker.preserveLayout(
 			List.of(sprite("minecraft:large", 32)), 16, 64, 64
 		);
 
-		assertNull(layout);
+		assertEquals(2, layout.placements().get(id("minecraft:large")).factor());
+		assertEquals(0, layout.placements().get(id("minecraft:large")).x());
 	}
 
 	private static LowAtlasPacker.Sprite sprite(String identifier, int size) {
