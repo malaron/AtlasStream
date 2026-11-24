@@ -165,6 +165,10 @@ vec4 atlasStreamSampleVirtualOrAtlas(vec2 uv, vec2 du, vec2 dv) {
 	}
 
 	public static String patchItem(String fragmentShader) {
+		return patchItem(fragmentShader, true);
+	}
+
+	public static String patchItem(String fragmentShader, boolean streamTiles) {
 		String uniform = "uniform sampler2D Sampler0;";
 		String sample = "vec4 color = texture(Sampler0, texCoord0);";
 		if (fragmentShader.contains(MARKER)) {
@@ -173,8 +177,11 @@ vec4 atlasStreamSampleVirtualOrAtlas(vec2 uv, vec2 du, vec2 dv) {
 		if (!fragmentShader.contains(uniform) || !fragmentShader.contains(sample)) {
 			return fragmentShader;
 		}
-		return fragmentShader
+		String patched = fragmentShader
 			.replace(uniform, uniform + VIRTUAL_TEXTURE_FUNCTIONS.replace("u_BlockTex", "Sampler0"))
-			.replace(sample, "vec4 color = atlasStreamSampleVirtualOrAtlas(texCoord0, dFdx(texCoord0), dFdy(texCoord0));");
+			.replace(sample, streamTiles
+				? "vec4 color = atlasStreamSampleVirtualOrAtlas(texCoord0, dFdx(texCoord0), dFdy(texCoord0));"
+				: "vec4 color = texture(Sampler0, atlasStreamMapLowAtlas(texCoord0));");
+		return patched;
 	}
 }
