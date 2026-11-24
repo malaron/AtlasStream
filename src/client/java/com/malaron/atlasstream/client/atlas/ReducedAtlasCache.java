@@ -38,7 +38,7 @@ final class ReducedAtlasCache {
 	private static final int MAGIC = 0x4C4F4C41;
 	private static final int FORMAT = 1;
 	// Bump whenever the reduced atlas build output changes for the same inputs.
-	private static final int BUILD_VERSION = 1;
+	private static final int BUILD_VERSION = 2;
 	private static final long MAX_TOTAL_BYTES = 3L << 30;
 	private static final int MAX_IMAGES_PER_KIND = 16;
 	private static final int HEADER_BYTES = 20;
@@ -65,14 +65,14 @@ final class ReducedAtlasCache {
 		int atlasWidth,
 		int atlasHeight,
 		int mipLevelCount,
-		int downscaleFactor,
+		int targetResolution,
 		boolean reducePbr,
 		boolean debugTint
 	) {
 		try {
 			MessageDigest digest = MessageDigest.getInstance("SHA-256");
 			add(digest, "v" + BUILD_VERSION + "/" + FORMAT);
-			add(digest, atlasWidth + "x" + atlasHeight + "x" + mipLevelCount + "/" + downscaleFactor
+			add(digest, atlasWidth + "x" + atlasHeight + "x" + mipLevelCount + "/" + targetResolution
 				+ "/" + reducePbr + "/" + debugTint);
 			for (AtlasRuntimeState.SpriteRegion region : regions) {
 				add(digest, region.identifier() + ":" + region.x() + "," + region.y() + "," + region.width() + ","
