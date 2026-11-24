@@ -404,7 +404,7 @@ public final class AtlasRuntimeState {
 					)
 				);
 				if (enableDistancePreview && isNearAtlasActive() && !isNearAtlasWarm()) {
-					setBuildPhase("Atlas ready; streaming nearby high-resolution detail...");
+					setBuildPhase("Low res atlas ready; nearby high-resolution detail stream beginning...");
 				} else if (!enableDistancePreview) {
 					setBuildPhase("Low-resolution atlas ready");
 					clearBuildPhase();
