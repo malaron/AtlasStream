@@ -83,6 +83,7 @@ public final class AtlasRuntimeState {
 	private static volatile GpuTextureView lowResolutionTextureView;
 	private static volatile GpuTexture lowAtlasRemapTexture;
 	private static volatile GpuTextureView lowAtlasRemapTextureView;
+	private static volatile LowAtlasRemap lowAtlasRemap;
 	private static volatile VirtualTextureGpuPageTable virtualTextureGpuPageTable;
 	private static volatile VirtualTextureTileBuilder virtualTextureTileBuilder;
 	private static volatile VirtualTextureGpuCache virtualTextureGpuCache;
@@ -103,6 +104,24 @@ public final class AtlasRuntimeState {
 	private AtlasRuntimeState() {
 	}
 
+	public static float[] remapLowAtlasUv(Identifier atlasLocation, float u, float v) {
+		LowAtlasRemap remap = lowAtlasRemap;
+		if (!TextureAtlas.LOCATION_BLOCKS.equals(atlasLocation) || remap == null) {
+			return new float[] {u, v};
+		}
+		return remap.map(u, v);
+	}
+
+	public static float[] remapLowAtlasUv(
+		Identifier atlasLocation, float u, float v, boolean upperBound
+	) {
+		LowAtlasRemap remap = lowAtlasRemap;
+		if (!TextureAtlas.LOCATION_BLOCKS.equals(atlasLocation) || remap == null) {
+			return new float[] {u, v};
+		}
+		return remap.map(u, v, upperBound);
+	}
+
 	public static void buildAndEnable(
 		TextureAtlas atlas,
 		ResourceManager resourceManager,
@@ -110,6 +129,57 @@ public final class AtlasRuntimeState {
 		boolean enableDistancePreview
 	) {
 		buildAndEnable(atlas, resourceManager, source::sendFeedback, source::sendError, enableDistancePreview);
+	}
+
+	private static final class LowAtlasRemap {
+		private final float sourceWidth;
+		private final float sourceHeight;
+		private final float destinationWidth;
+		private final float destinationHeight;
+		private final List<com.malaron.atlasstream.atlas.LowAtlasPacker.Placement> placements;
+
+		private LowAtlasRemap(
+			int sourceWidth,
+			int sourceHeight,
+			int destinationWidth,
+			int destinationHeight,
+			com.malaron.atlasstream.atlas.LowAtlasPacker.Layout layout
+		) {
+			this.sourceWidth = sourceWidth;
+			this.sourceHeight = sourceHeight;
+			this.destinationWidth = destinationWidth;
+			this.destinationHeight = destinationHeight;
+			this.placements = List.copyOf(layout.placements().values());
+		}
+
+		private float[] map(float u, float v) {
+			return map(u, v, false);
+		}
+
+		private float[] map(float u, float v, boolean upperBound) {
+			double x = u * sourceWidth;
+			double y = v * sourceHeight;
+			if (upperBound) {
+				x = Math.nextDown(x);
+				y = Math.nextDown(y);
+			}
+			for (com.malaron.atlasstream.atlas.LowAtlasPacker.Placement placement : placements) {
+				var source = placement.sprite();
+				double localX = x - source.sourceX();
+				double localY = y - source.sourceY();
+				if (localX < -source.paddingX() || localY < -source.paddingY()
+						|| localX > source.width() + source.paddingX()
+						|| localY > source.height() + source.paddingY()) {
+					continue;
+				}
+				float[] mapped = new float[] {
+					(float) ((placement.x() + placement.paddingX() + localX / placement.factor()) / destinationWidth),
+					(float) ((placement.y() + placement.paddingY() + localY / placement.factor()) / destinationHeight)
+				};
+				return mapped;
+			}
+			return new float[] {u, v};
+		}
 	}
 
 	public static void buildAndEnable(
@@ -2058,6 +2128,9 @@ public final class AtlasRuntimeState {
 				0
 			);
 			previewedAtlas = atlas;
+			lowAtlasRemap = new LowAtlasRemap(
+				atlasWidth, atlasHeight, image.layout().width(), image.layout().height(), image.layout()
+			);
 			lowAtlasStreamedMipLevels = image.layout().placements().values().stream()
 				.mapToInt(placement -> Integer.numberOfTrailingZeros(placement.factor()))
 				.max()
@@ -2348,6 +2421,7 @@ public final class AtlasRuntimeState {
 		closeAnimatedSprites(animatedSprites);
 		animatedSprites = List.of();
 		lowAtlasStreamedMipLevels = 0;
+		lowAtlasRemap = null;
 		closeLowAtlasRemap();
 		animatedStateMismatchLogged = false;
 		GpuTextureView textureView = lowResolutionTextureView;
