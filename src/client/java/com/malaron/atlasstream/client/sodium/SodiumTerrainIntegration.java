@@ -242,7 +242,11 @@ public final class SodiumTerrainIntegration {
 			java.util.function.Supplier<Object> sampler = () -> null;
 			method.invoke(samplerHolder, type, id, sampler, new String[] {"u_AtlasStreamNearRemap"});
 			java.util.function.IntSupplier lowRemapId = () -> {
-				return AtlasRuntimeState.isDistancePreviewEnabled()
+				SectionLod lod = ACTIVE_LOD.get();
+				boolean fullLayoutNear = lod == SectionLod.HIGH_RESOLUTION
+					&& AtlasRuntimeState.isNearAtlasActive()
+					&& !AtlasRuntimeState.isNearAtlasCompact();
+				return AtlasRuntimeState.isDistancePreviewEnabled() && !fullLayoutNear
 					? AtlasRuntimeState.lowAtlasRemapGlId()
 					: AtlasRuntimeState.nearPlaceholderGlId();
 			};

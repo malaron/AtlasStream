@@ -761,6 +761,11 @@ public final class AtlasRuntimeState {
 		return near != null && near.isUsable();
 	}
 
+	public static boolean isNearAtlasCompact() {
+		NearAtlas near = nearAtlas;
+		return near != null && near.isUsable() && near.isCompact();
+	}
+
 	public static NearAtlas activeNearAtlas() {
 		NearAtlas near = nearAtlas;
 		return near != null && near.isUsable() ? near : null;
