@@ -61,8 +61,16 @@ void main() {
 		String patched = VirtualTextureShaderPatcher.patchItem(source);
 		assertNotEquals(source, patched);
 		assertTrue(patched.contains("textureGrad(Sampler0, lowUv, lowDu, lowDv)"));
-		assertTrue(patched.contains("atlasStreamSampleVirtualOrAtlas(texCoord0, dFdx(texCoord0), dFdy(texCoord0))"));
-		assertEquals(patched, VirtualTextureShaderPatcher.patchItem(patched));
+	}
+
+	@Test
+	void patchesIrisItemsWithDirectLowAtlasRemap() {
+		String source = "uniform sampler2D Sampler0;\nvoid main() { vec4 color = texture(Sampler0, texCoord0); }";
+		String patched = VirtualTextureShaderPatcher.patchItem(source, false);
+
+		assertTrue(patched.contains("vec4 color = texture(Sampler0, atlasStreamMapLowAtlas(texCoord0));"));
+		assertFalse(patched.contains("vec4 color = atlasStreamSampleVirtualOrAtlas"));
+		assertEquals(patched, VirtualTextureShaderPatcher.patchItem(patched, false));
 		assertEquals("void main() {}", VirtualTextureShaderPatcher.patchItem("void main() {}"));
 	}
 

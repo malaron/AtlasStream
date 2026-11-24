@@ -258,6 +258,22 @@ public final class IrisPbrAtlasReducer {
 		}
 	}
 
+	static void rebindHolder(Object holder, GpuTexture... albedos) {
+		if (holder == null) {
+			AtlasStream.LOGGER.warn("Could not preserve Iris PBR maps because the original holder is unavailable");
+			return;
+		}
+		try {
+			Map<Integer, Object> holders = irisHolders(irisManager());
+			for (GpuTexture albedo : albedos) {
+				holders.put(glId(albedo), holder);
+			}
+			AtlasStream.LOGGER.info("Rebound untouched Iris PBR maps to the original-layout albedo atlas");
+		} catch (ReflectiveOperationException | RuntimeException exception) {
+			AtlasStream.LOGGER.error("Could not rebind Iris PBR maps to the original-layout albedo atlas", exception);
+		}
+	}
+
 	// Returns the PBR atlas objects that now own reduced textures, so Iris's full-size animation uploads can be skipped.
 	static List<Object> apply(Object holder, GpuTexture reducedAlbedo, Images images) {
 		List<Object> reduced = new ArrayList<>();

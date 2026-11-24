@@ -24,8 +24,11 @@ class CompactSectionResidencyTest {
 	}
 
 	@Test
-	void legacyNonCompactAndUnknownSectionsRemainResolved() {
-		assertTrue(CompactSectionResidency.resolved(false, false, Set.of("missing"), ignored -> false));
-		assertTrue(CompactSectionResidency.resolved(true, false, null, ignored -> false));
+	void nonCompactSparseSectionsAlsoWaitForKnownSprites() {
+		assertFalse(CompactSectionResidency.resolved(false, false, Set.of("missing"), ignored -> false));
+		assertTrue(CompactSectionResidency.resolved(false, false, Set.of("resident"), ignored -> true));
+		assertFalse(CompactSectionResidency.resolved(false, false, Set.of(), ignored -> false));
+		assertFalse(CompactSectionResidency.resolved(false, false, null, ignored -> false));
+		assertTrue(CompactSectionResidency.resolved(false, true, null, ignored -> false));
 	}
 }

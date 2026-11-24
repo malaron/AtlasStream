@@ -38,7 +38,7 @@ final class ReducedAtlasCache {
 	private static final int MAGIC = 0x4C4F4C41;
 	private static final int FORMAT = 1;
 	// Bump whenever the reduced atlas build output changes for the same inputs.
-	private static final int BUILD_VERSION = 2;
+	private static final int BUILD_VERSION = 3;
 	private static final long MAX_TOTAL_BYTES = 3L << 30;
 	private static final int MAX_IMAGES_PER_KIND = 16;
 	private static final int HEADER_BYTES = 20;

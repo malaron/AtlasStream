@@ -296,6 +296,7 @@ public final class AtlasRuntimeState {
 		setBuildPhase("Preparing texture atlas...");
 		long buildGeneration;
 		List<SpriteRegion> regions;
+		Map<Identifier, NativeImage[]> spriteMipImages;
 		int atlasWidth;
 		int atlasHeight;
 		int mipLevelCount;
@@ -314,6 +315,7 @@ public final class AtlasRuntimeState {
 			atlasHeight = geometry.atlasStream$getHeight();
 			mipLevelCount = geometry.atlasStream$getMipLevelCount();
 			regions = snapshotRegions(atlas, atlasWidth, atlasHeight);
+			spriteMipImages = snapshotSpriteMipImages(atlas);
 			targetResolution = AtlasStreamClient.getConfig().targetResolution();
 			// The PBR images only need the resource pack, so they can be built before Iris has its pipeline.
 			reducePbr = enableDistancePreview && (SodiumTerrainIntegration.isIrisShaderPackInUse()
@@ -329,6 +331,7 @@ public final class AtlasRuntimeState {
 			try {
 				return createLowAtlas(
 					resourceManager,
+					spriteMipImages,
 					regions,
 					atlasWidth,
 					atlasHeight,
@@ -805,6 +808,11 @@ public final class AtlasRuntimeState {
 	public static boolean isNearAtlasActive() {
 		NearAtlas near = nearAtlas;
 		return near != null && near.isUsable();
+	}
+
+	public static boolean isNearAtlasCompact() {
+		NearAtlas near = nearAtlas;
+		return near != null && near.isUsable() && near.isCompact();
 	}
 
 	public static NearAtlas activeNearAtlas() {
@@ -1612,6 +1620,19 @@ public final class AtlasRuntimeState {
 	// True while a reduced rebuild is guaranteed to follow a resource reload, so Iris's full-size blocks PBR atlases
 	// would be built only to be discarded. The rebuild registers reduced maps itself.
 	public static synchronized boolean shouldSkipIrisBlockPbrLoad(TextureAtlas atlas) {
+		int targetResolution = AtlasStreamClient.getConfig().targetResolution();
+		TextureAtlasAccessor geometry = (TextureAtlasAccessor) atlas;
+		boolean preservedLayoutFits = geometry.atlasStream$getWidth() <= 16384
+			&& geometry.atlasStream$getHeight() <= 16384;
+		if (preservedLayoutFits) {
+			AtlasStream.LOGGER.info(
+				"Keeping Iris block PBR atlases because the {}x{} atlas supports selective {}px reduction",
+				geometry.atlasStream$getWidth(),
+				geometry.atlasStream$getHeight(),
+				targetResolution
+			);
+			return false;
+		}
 		return (reloadRebuildPending || (reloadBuildRunning && BUILDING.get()) || irisSwitchNeedsRebuild())
 			&& TextureAtlas.LOCATION_BLOCKS.equals(atlas.location())
 			&& SodiumTerrainIntegration.isIrisShaderPackInUse();
@@ -1820,8 +1841,20 @@ public final class AtlasRuntimeState {
 		return List.copyOf(regions);
 	}
 
+	private static Map<Identifier, NativeImage[]> snapshotSpriteMipImages(TextureAtlas atlas) {
+		Map<Identifier, NativeImage[]> result = new HashMap<>();
+		for (TextureAtlasSprite sprite : ((TextureAtlasAccessor) atlas).atlasStream$getSprites()) {
+			result.put(
+				sprite.contents().name(),
+				((SpriteContentsAccessor) sprite.contents()).atlasStream$getMipImages()
+			);
+		}
+		return Map.copyOf(result);
+	}
+
 	private static LowAtlasImage createLowAtlas(
 		ResourceManager resourceManager,
+		Map<Identifier, NativeImage[]> spriteMipImages,
 		List<SpriteRegion> regions,
 		int sourceAtlasWidth,
 		int sourceAtlasHeight,
@@ -1837,12 +1870,46 @@ public final class AtlasRuntimeState {
 				region.identifier(), region.x(), region.y(), region.width(), region.height(),
 				region.paddingX(), region.paddingY()))
 			.toList();
-		com.malaron.atlasstream.atlas.LowAtlasPacker.Layout layout =
-			com.malaron.atlasstream.atlas.LowAtlasPacker.pack(packedSprites, targetResolution, 16384);
+		com.malaron.atlasstream.atlas.LowAtlasPacker.Layout originalLayout =
+			com.malaron.atlasstream.atlas.LowAtlasPacker.preserveLayout(
+				packedSprites, targetResolution, sourceAtlasWidth, sourceAtlasHeight
+			);
 		int lowMipLevelCount = Math.min(
 			sourceMipLevelCount,
 			Integer.numberOfTrailingZeros(targetResolution) + 1
 		);
+		boolean preserveOriginalLayout = originalLayout != null;
+		boolean preserveOriginalMips = preserveOriginalLayout && regions.stream().allMatch(region -> {
+			NativeImage[] images = spriteMipImages.get(region.identifier());
+			return images != null && images.length >= lowMipLevelCount;
+		});
+		if (preserveOriginalLayout) {
+			List<String> reductions = regions.stream()
+				.filter(region -> Math.max(region.width(), region.height()) > targetResolution)
+				.map(region -> region.identifier() + "=" + region.width() + "x" + region.height())
+				.sorted()
+				.toList();
+			List<String> missingMips = regions.stream()
+				.filter(region -> {
+					NativeImage[] images = spriteMipImages.get(region.identifier());
+					return images == null || images.length < lowMipLevelCount;
+				})
+				.map(region -> region.identifier().toString())
+				.sorted()
+				.toList();
+			AtlasStream.LOGGER.info(
+				"Using original-layout low atlas: selectivelyReducedSprites={} [{}], missingMipChains={} [{}]",
+				reductions.size(),
+				reductions.stream().limit(24).collect(java.util.stream.Collectors.joining(", ")),
+				missingMips.size(),
+				missingMips.stream().limit(24).collect(java.util.stream.Collectors.joining(", "))
+			);
+		}
+		com.malaron.atlasstream.atlas.LowAtlasPacker.Layout layout = preserveOriginalLayout
+			? originalLayout
+			: com.malaron.atlasstream.atlas.LowAtlasPacker.pack(
+				packedSprites, targetResolution, 16384
+			);
 		long imageBytes = 0;
 		for (int level = 0; level < lowMipLevelCount; level++) {
 			imageBytes += (long) Math.max(1, layout.width() >> level) * Math.max(1, layout.height() >> level) * 4;
@@ -1854,15 +1921,16 @@ public final class AtlasRuntimeState {
 		List<NativeImage> mipLevels = new ArrayList<>(lowMipLevelCount);
 		List<AnimatedSpriteData> animatedSpriteData = new ArrayList<>();
 		long[] totalImageBytes = {imageBytes};
+		boolean cachePbr = reducePbr && !preserveOriginalLayout;
 		String cacheKey = ReducedAtlasCache.fingerprint(
 			resourceManager, regions, sourceAtlasWidth, sourceAtlasHeight,
-			sourceMipLevelCount, targetResolution, reducePbr,
+			sourceMipLevelCount, targetResolution, cachePbr,
 			AtlasStreamClient.getConfig().debugTintLowResolution()
 		);
 		ReducedAtlasCache.Entry cached = cacheKey == null
 			? null
 			: ReducedAtlasCache.load(
-				cacheKey, layout.width(), layout.height(), lowMipLevelCount, reducePbr
+				cacheKey, layout.width(), layout.height(), lowMipLevelCount, cachePbr
 			);
 		if (cached != null) {
 			List<AnimatedSpriteData> cachedAnimations = new ArrayList<>();
@@ -1884,9 +1952,12 @@ public final class AtlasRuntimeState {
 				);
 				return new LowAtlasImage(
 					cached.albedo(), layout, remap, cachedAnimations,
-					reducePbr ? new IrisPbrAtlasReducer.Images(
+					cachePbr ? new IrisPbrAtlasReducer.Images(
 						cached.normal(), cached.specular()
-					) : null
+					) : null,
+					preserveOriginalLayout,
+					layout.placements().values().stream()
+						.allMatch(placement -> placement.factor() == 1)
 				);
 			} catch (IOException | RuntimeException exception) {
 				cached.close();
@@ -1898,7 +1969,26 @@ public final class AtlasRuntimeState {
 		NativeImage atlas = new NativeImage(layout.width(), layout.height(), true);
 		mipLevels.add(atlas);
 		try {
-			if (reducePbr) {
+			if (preserveOriginalLayout) {
+				for (int level = 1; level < lowMipLevelCount; level++) {
+					mipLevels.add(new NativeImage(
+						Math.max(1, layout.width() >> level),
+						Math.max(1, layout.height() >> level),
+						true
+					));
+				}
+				for (SpriteRegion region : regions) {
+					com.malaron.atlasstream.atlas.LowAtlasPacker.Placement placement =
+						layout.placements().get(region.identifier());
+					if (placement != null && placement.factor() == 1
+							&& spriteMipImages.get(region.identifier()) != null) {
+						writeOriginalSpriteMips(
+							mipLevels, spriteMipImages.get(region.identifier()), region
+						);
+					}
+				}
+			}
+			if (reducePbr && !preserveOriginalLayout) {
 				pbrFuture = CompletableFuture.supplyAsync(() -> {
 					try {
 						return IrisPbrAtlasReducer.buildRepacked(
@@ -1932,7 +2022,13 @@ public final class AtlasRuntimeState {
 						throw new IOException("Texture dimensions do not match stitched sprite bounds");
 					}
 					try {
-						writeRepackedSprite(atlas, source, region, placement);
+						if (!preserveOriginalLayout) {
+							writeRepackedSprite(atlas, source, region, placement);
+						} else if (placement.factor() != 1) {
+							writeRepackedSpriteMips(
+								mipLevels, source, region, placement
+							);
+						}
 						if (region.animated()) {
 							SpriteRegion destination = destinationRegion(region, placement);
 							AnimatedSpriteData animation = createAnimatedSpriteData(
@@ -1957,8 +2053,10 @@ public final class AtlasRuntimeState {
 			List<SpriteRegion> lowRegions = layout.placements().values().stream()
 				.map(placement -> destinationRegion(regionsById.get(placement.sprite().identifier()), placement))
 				.toList();
-			for (int level = 1; level < lowMipLevelCount; level++) {
-				mipLevels.add(createMipLevel(mipLevels.get(level - 1), lowRegions, level));
+			if (!preserveOriginalLayout) {
+				for (int level = 1; level < lowMipLevelCount; level++) {
+					mipLevels.add(createMipLevel(mipLevels.get(level - 1), lowRegions, level));
+				}
 			}
 			if (AtlasStreamClient.getConfig().debugTintLowResolution()) {
 				mipLevels.forEach(AtlasRuntimeState::tintMagenta);
@@ -1973,13 +2071,23 @@ public final class AtlasRuntimeState {
 			}
 			NativeImage remap = createLowAtlasRemap(layout, sourceAtlasWidth, sourceAtlasHeight, sourceMipLevelCount);
 			AtlasStream.LOGGER.info(
-				"Repacked low atlas at target {}px: {} sprites into {}x{} with {} mips ({} skipped); no pixels were upscaled",
-				targetResolution, loadedSprites.get(), layout.width(), layout.height(), lowMipLevelCount, skippedSprites.get()
+				"{} low atlas at target {}px: {} sprites into {}x{} with {} mips ({} skipped); no pixels were upscaled",
+				preserveOriginalLayout ? "Preserved original-layout" : "Repacked",
+				targetResolution, loadedSprites.get(), layout.width(), layout.height(), lowMipLevelCount,
+				skippedSprites.get()
 			);
 			if (cacheKey != null) {
 				ReducedAtlasCache.store(cacheKey, mipLevels, pbrImages);
 			}
-			return new LowAtlasImage(mipLevels, layout, remap, animatedSpriteData, pbrImages);
+			return new LowAtlasImage(
+				mipLevels,
+				layout,
+				remap,
+				animatedSpriteData,
+				pbrImages,
+				preserveOriginalLayout,
+				layout.placements().values().stream().allMatch(placement -> placement.factor() == 1)
+			);
 		} catch (RuntimeException | Error exception) {
 			mipLevels.forEach(NativeImage::close);
 			closeAnimatedSprites(animatedSpriteData);
@@ -2295,6 +2403,90 @@ public final class AtlasRuntimeState {
 		}
 	}
 
+	private static void writeOriginalSpriteMips(
+		List<NativeImage> destinationMips,
+		NativeImage[] sourceMips,
+		SpriteRegion region
+	) {
+		int columns = Math.max(1, sourceMips[0].getWidth() / Math.max(1, region.width()));
+		int rows = Math.max(1, sourceMips[0].getHeight() / Math.max(1, region.height()));
+		for (int level = 0; level < destinationMips.size(); level++) {
+			NativeImage source = sourceMips[level];
+			int sourceWidth = Math.max(1, source.getWidth() / columns);
+			int sourceHeight = Math.max(1, source.getHeight() / rows);
+			int paddedWidth = Math.max(
+				sourceWidth,
+				Math.max(1, (region.width() + region.paddingX() * 2) >> level)
+			);
+			int paddedHeight = Math.max(
+				sourceHeight,
+				Math.max(1, (region.height() + region.paddingY() * 2) >> level)
+			);
+			int sourceOffsetX = (paddedWidth - sourceWidth) / 2;
+			int sourceOffsetY = (paddedHeight - sourceHeight) / 2;
+			int destinationX = (region.x() - region.paddingX()) >> level;
+			int destinationY = (region.y() - region.paddingY()) >> level;
+			NativeImage destination = destinationMips.get(level);
+			for (int y = 0; y < paddedHeight && destinationY + y < destination.getHeight(); y++) {
+				int sourceY = Math.clamp(y - sourceOffsetY, 0, sourceHeight - 1);
+				for (int x = 0; x < paddedWidth && destinationX + x < destination.getWidth(); x++) {
+					int sourceX = Math.clamp(x - sourceOffsetX, 0, sourceWidth - 1);
+					destination.setPixel(
+						destinationX + x,
+						destinationY + y,
+						source.getPixel(sourceX, sourceY)
+					);
+				}
+			}
+		}
+	}
+
+	private static void writeRepackedSpriteMips(
+		List<NativeImage> destinationMips,
+		BufferedImage source,
+		SpriteRegion region,
+		com.malaron.atlasstream.atlas.LowAtlasPacker.Placement placement
+	) {
+		for (int level = 0; level < destinationMips.size(); level++) {
+			NativeImage destination = destinationMips.get(level);
+			int mipDivisor = 1 << level;
+			int sampleFactor = placement.factor() * mipDivisor;
+			int width = Math.max(1, Math.ceilDiv(placement.width(), mipDivisor));
+			int height = Math.max(1, Math.ceilDiv(placement.height(), mipDivisor));
+			int paddedWidth = Math.max(
+				width,
+				Math.ceilDiv(placement.paddedWidth(), mipDivisor)
+			);
+			int paddedHeight = Math.max(
+				height,
+				Math.ceilDiv(placement.paddedHeight(), mipDivisor)
+			);
+			int originX = (placement.x() >> level);
+			int originY = (placement.y() >> level);
+			for (int y = 0; y < paddedHeight; y++) {
+				int sourceY = (y - (placement.paddingY() >> level)) * sampleFactor;
+				for (int x = 0; x < paddedWidth; x++) {
+					int sourceX = (x - (placement.paddingX() >> level)) * sampleFactor;
+					if (originX + x < destination.getWidth()
+							&& originY + y < destination.getHeight()) {
+						destination.setPixel(
+							originX + x,
+							originY + y,
+							averageImagePixels(
+								source,
+								sourceX,
+								sourceY,
+								region.width(),
+								region.height(),
+								sampleFactor
+							)
+						);
+					}
+				}
+			}
+		}
+	}
+
 	private static int averageImagePixels(
 		BufferedImage source, int x, int y, int width, int height, int factor
 	) {
@@ -2413,6 +2605,10 @@ public final class AtlasRuntimeState {
 		int atlasMipLevels,
 		boolean releaseHighResolutionAtlas
 	) {
+		if (image.requiresNoReduction() && SodiumTerrainIntegration.isIrisShaderPackInUse()) {
+			activateOriginalIrisAtlas(atlas, highResolutionTexture);
+			return;
+		}
 		var device = RenderSystem.getDevice();
 		closeVirtualTextureGpuPageTable();
 		GpuTexture texture = device.createTexture(
@@ -2514,7 +2710,7 @@ public final class AtlasRuntimeState {
 			animatedSprites = image.transferAnimatedSprites();
 			animatedStateMismatchLogged = false;
 			if (releaseHighResolutionAtlas) {
-				Object pbrHolder = image.pbrImages() != null
+				Object pbrHolder = image.pbrImages() != null || image.isOriginalLayout()
 					? IrisPbrAtlasReducer.detachHolder(highResolutionTexture)
 					: null;
 				if (image.pbrImages() != null) {
@@ -2535,11 +2731,31 @@ public final class AtlasRuntimeState {
 					nearAtlas = created;
 					nearAtlasUnavailable = created == null;
 				} else {
-					nearAtlasUnavailable = false;
+					// An original-layout low atlas is already the correct all-distance Iris texture. The lack of a
+					// near atlas is intentional here, not a shader-switch transition that needs another reload.
+					nearAtlasUnavailable = image.isOriginalLayout();
 				}
-				replaceBlockAtlasWithLowResolution(atlas, highResolutionTexture, texture, textureView);
-				if (image.pbrImages() != null) {
+				if (image.isOriginalLayout()) {
+					AtlasStream.LOGGER.info(
+						"Low atlas preserves the original {}x{} layout and vanilla PBR maps; "
+							+ "Iris terrain uses both for all distances",
+						atlasWidth,
+						atlasHeight
+					);
+				}
+				if (image.isOriginalLayout()) {
+					// Item geometry and GUI previews retain direct references to the original atlas view. Keep it
+					// resident for this no-relocation layout; Sodium terrain still selects the reduced texture
+					// explicitly for terrain draws.
+					IrisPbrAtlasReducer.rebindHolder(pbrHolder, highResolutionTexture, texture);
+					AtlasStream.LOGGER.info(
+						"Retaining the original block atlas for inventory and held-item rendering"
+					);
+				} else if (image.pbrImages() != null) {
+					replaceBlockAtlasWithLowResolution(atlas, highResolutionTexture, texture, textureView);
 					reducedPbrAtlases = IrisPbrAtlasReducer.apply(pbrHolder, texture, image.pbrImages());
+				} else {
+					replaceBlockAtlasWithLowResolution(atlas, highResolutionTexture, texture, textureView);
 				}
 			}
 			initialized = true;
@@ -2562,6 +2778,33 @@ public final class AtlasRuntimeState {
 				texture.close();
 			}
 		}
+
+	}
+
+	private static void activateOriginalIrisAtlas(TextureAtlas atlas, GpuTexture texture) {
+		GpuTextureView view = ((AbstractTextureAccessor) atlas).atlasStream$getTextureView();
+		if (texture == null || view == null) {
+			throw new IllegalStateException("The original Iris block atlas is unavailable");
+		}
+		closeVirtualTextureGpuPageTable();
+		if (nearAtlas != null) {
+			nearAtlas.close();
+			nearAtlas = null;
+		}
+		nearAtlasUnavailable = false;
+		lowAtlasRemap = null;
+		lowAtlasStreamedMipLevels = 0;
+		closeLowAtlasRemap();
+		lowResolutionTexture = texture;
+		lowResolutionTextureView = view;
+		previewedAtlas = atlas;
+		atlasOwnsLowResolutionTexture = false;
+		originalAtlasReleaseConfirmed = false;
+		reducedPbrAtlases = List.of();
+		animatedSprites = List.of();
+		AtlasStream.LOGGER.info(
+			"Atlas requires no reduction; keeping the original Iris albedo and PBR atlases unchanged"
+		);
 	}
 
 	public static void updateAnimatedFrames(TextureAtlas atlas) {
@@ -3489,6 +3732,8 @@ public final class AtlasRuntimeState {
 		private final NativeImage remap;
 		private final List<AnimatedSpriteData> animatedSprites;
 		private final IrisPbrAtlasReducer.Images pbrImages;
+		private final boolean originalLayout;
+		private final boolean requiresNoReduction;
 		private boolean animationsTransferred;
 
 		private LowAtlasImage(
@@ -3496,13 +3741,17 @@ public final class AtlasRuntimeState {
 			com.malaron.atlasstream.atlas.LowAtlasPacker.Layout layout,
 			NativeImage remap,
 			List<AnimatedSpriteData> animatedSprites,
-			IrisPbrAtlasReducer.Images pbrImages
+			IrisPbrAtlasReducer.Images pbrImages,
+			boolean originalLayout,
+			boolean requiresNoReduction
 		) {
 			this.mipLevels = List.copyOf(mipLevels);
 			this.layout = layout;
 			this.remap = remap;
 			this.animatedSprites = List.copyOf(animatedSprites);
 			this.pbrImages = pbrImages;
+			this.originalLayout = originalLayout;
+			this.requiresNoReduction = requiresNoReduction;
 		}
 
 		private IrisPbrAtlasReducer.Images pbrImages() {
@@ -3515,6 +3764,14 @@ public final class AtlasRuntimeState {
 
 		private com.malaron.atlasstream.atlas.LowAtlasPacker.Layout layout() {
 			return layout;
+		}
+
+		private boolean isOriginalLayout() {
+			return originalLayout;
+		}
+
+		private boolean requiresNoReduction() {
+			return requiresNoReduction;
 		}
 
 		private NativeImage remap() {

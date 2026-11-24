@@ -4,6 +4,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 
 import com.malaron.atlasstream.AtlasStream;
+import com.malaron.atlasstream.client.sodium.SodiumTerrainIntegration;
 import com.malaron.atlasstream.client.streaming.VirtualItemPipeline;
 import com.malaron.atlasstream.shader.VirtualTextureShaderPatcher;
 
@@ -62,7 +63,10 @@ public abstract class PipelineCacheMixin {
 				if (source == null) {
 					return null;
 				}
-				String patched = VirtualTextureShaderPatcher.patchItem(source);
+				String patched = VirtualTextureShaderPatcher.patchItem(
+					source,
+					!SodiumTerrainIntegration.isIrisShaderPackInUse()
+				);
 				if (patched.equals(source) && !source.contains("u_VirtualPageTable")) {
 					AtlasStream.LOGGER.error("Could not add virtual-texture sampling to the item shader");
 					return null;
