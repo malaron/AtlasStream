@@ -17,7 +17,7 @@ public final class VanillaNearShaderPatcher {
 	public static String patchReferences(String source) {
 		Matcher declaration = MID_DECLARATION.matcher(source);
 		if (!declaration.find()) {
-			return replaceUvReferences(source, "atlasStreamAtlasRemap(iris_UV0)");
+			return source;
 		}
 		String type = declaration.group(1);
 		String before = source.substring(0, declaration.start());

@@ -258,6 +258,15 @@ public final class IrisPbrAtlasReducer {
 		}
 	}
 
+	static Object holder(GpuTexture original) {
+		try {
+			return irisHolders(irisManager()).get(glId(original));
+		} catch (ReflectiveOperationException | RuntimeException exception) {
+			AtlasStream.LOGGER.error("Could not read Iris PBR holder", exception);
+			return null;
+		}
+	}
+
 	static void rebindHolder(Object holder, GpuTexture... albedos) {
 		if (holder == null) {
 			AtlasStream.LOGGER.warn("Could not preserve Iris PBR maps because the original holder is unavailable");
