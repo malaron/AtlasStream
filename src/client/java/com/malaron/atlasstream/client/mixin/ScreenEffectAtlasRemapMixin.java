@@ -36,10 +36,8 @@ public abstract class ScreenEffectAtlasRemapMixin {
 		boolean useNear = AtlasRuntimeState.useNearAtlasForScreenEffect(atlasLocation, u0, v0, u1, v1);
 		AtlasRuntimeState.setScreenEffectUsesNearAtlas(useNear);
 		AtlasRuntimeState.logScreenOverlayRemap(atlasLocation, u0, v0, u1, v1);
-		float[] first = useNear ? new float[] {u0, v0}
-			: AtlasRuntimeState.remapLowAtlasUv(atlasLocation, u0, v0);
-		float[] second = useNear ? new float[] {u1, v1}
-			: AtlasRuntimeState.remapLowAtlasUv(atlasLocation, u1, v1, true);
+		float[] first = AtlasRuntimeState.screenEffectUv(atlasLocation, u0, v0, false, useNear);
+		float[] second = AtlasRuntimeState.screenEffectUv(atlasLocation, u1, v1, true, useNear);
 		original.call(
 			atlasLocation, first[0], first[1], second[0], second[1],
 			poseStack, submitNodeCollector, color
@@ -68,16 +66,12 @@ public abstract class ScreenEffectAtlasRemapMixin {
 		boolean useNear = AtlasRuntimeState.useNearAtlasForScreenEffect(sprite);
 		AtlasRuntimeState.setScreenEffectUsesNearAtlas(useNear);
 		AtlasRuntimeState.logFireOverlayRemap(sprite);
-		float[] first = useNear
-			? new float[] {sprite.getU1(), sprite.getV1()}
-			: AtlasRuntimeState.remapLowAtlasUv(
-				sprite.atlasLocation(), sprite.getU1(), sprite.getV1(), true
-			);
-		float[] second = useNear
-			? new float[] {sprite.getU0(), sprite.getV0()}
-			: AtlasRuntimeState.remapLowAtlasUv(
-				sprite.atlasLocation(), sprite.getU0(), sprite.getV0()
-			);
+		float[] first = AtlasRuntimeState.screenEffectUv(
+			sprite, sprite.getU1(), sprite.getV1(), true
+		);
+		float[] second = AtlasRuntimeState.screenEffectUv(
+			sprite, sprite.getU0(), sprite.getV0(), false
+		);
 		atlasStream$buildQuad(builder, pose, x0, y0, x1, y1, z,
 			first[0], first[1], second[0], second[1], color);
 	}

@@ -290,6 +290,18 @@ public final class NearAtlas implements AutoCloseable {
 		return isUsable() && resident.containsKey(sprite);
 	}
 
+	float[] remapUv(TextureAtlasSprite sprite, float u, float v) {
+		Geometry geometry = resident.get(sprite);
+		if (geometry == null) {
+			return new float[] {u, v};
+		}
+		float sourceX = u * bigWidth;
+		float sourceY = v * bigHeight;
+		float mappedX = sourceX + geometry.x - geometry.bigX;
+		float mappedY = sourceY + geometry.y - geometry.bigY;
+		return new float[] {mappedX / width, mappedY / height};
+	}
+
 	public static long residencyRevision() {
 		return RESIDENCY_REVISION.get();
 	}

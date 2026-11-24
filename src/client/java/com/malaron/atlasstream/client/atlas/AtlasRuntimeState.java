@@ -706,6 +706,42 @@ public final class AtlasRuntimeState {
 		return screenEffectUsesNearAtlas && near != null && near.isUsable() ? near.albedoView() : null;
 	}
 
+	public static float[] screenEffectUv(
+		Identifier atlasLocation, float u, float v, boolean upperBound, boolean useNear
+	) {
+		if (!useNear) {
+			return remapLowAtlasUv(atlasLocation, u, v, upperBound);
+		}
+		TextureAtlas atlas = previewedAtlas;
+		NearAtlas near = nearAtlas;
+		if (atlas == null || near == null) {
+			return new float[] {u, v};
+		}
+		float adjustedU = u;
+		float adjustedV = v;
+		if (upperBound) {
+			adjustedU = Math.nextDown(u);
+			adjustedV = Math.nextDown(v);
+		}
+		for (TextureAtlasSprite sprite : ((TextureAtlasAccessor) atlas).atlasStream$getSprites()) {
+			if (adjustedU >= sprite.getU0() && adjustedU <= sprite.getU1()
+					&& adjustedV >= sprite.getV0() && adjustedV <= sprite.getV1()) {
+				return near.remapUv(sprite, adjustedU, adjustedV);
+			}
+		}
+		return new float[] {adjustedU, adjustedV};
+	}
+
+	public static float[] screenEffectUv(TextureAtlasSprite sprite, float u, float v, boolean upperBound) {
+		NearAtlas near = nearAtlas;
+		if (near == null || !near.isResident(sprite)) {
+			return remapLowAtlasUv(sprite.atlasLocation(), u, v, upperBound);
+		}
+		float adjustedU = upperBound ? Math.nextDown(u) : u;
+		float adjustedV = upperBound ? Math.nextDown(v) : v;
+		return near.remapUv(sprite, adjustedU, adjustedV);
+	}
+
 	public static void setScreenEffectUsesNearAtlas(boolean useNearAtlas) {
 		screenEffectUsesNearAtlas = useNearAtlas;
 	}
