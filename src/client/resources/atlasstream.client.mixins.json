@@ -20,6 +20,7 @@
 		"MinecartBlockSpriteUsageMixin",
 		"PipelineCacheMixin",
 		"PreparedItemVirtualTextureMixin",
+		"ScreenEffectAtlasRemapMixin",
 		"SpriteAnimationStateAccessor",
 		"SpriteContentsAccessor",
 		"SpriteContentsDownscaleMixin",

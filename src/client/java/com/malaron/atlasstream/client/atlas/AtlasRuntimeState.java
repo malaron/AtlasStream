@@ -83,6 +83,9 @@ public final class AtlasRuntimeState {
 	private static volatile GpuTextureView lowResolutionTextureView;
 	private static volatile GpuTexture lowAtlasRemapTexture;
 	private static volatile GpuTextureView lowAtlasRemapTextureView;
+	private static volatile LowAtlasRemap lowAtlasRemap;
+	private static volatile boolean screenEffectUsesNearAtlas;
+	private static final AtomicBoolean SCREEN_OVERLAY_REMAP_LOGGED = new AtomicBoolean();
 	private static volatile VirtualTextureGpuPageTable virtualTextureGpuPageTable;
 	private static volatile VirtualTextureTileBuilder virtualTextureTileBuilder;
 	private static volatile VirtualTextureGpuCache virtualTextureGpuCache;
@@ -103,6 +106,66 @@ public final class AtlasRuntimeState {
 	private AtlasRuntimeState() {
 	}
 
+	public static float[] remapLowAtlasUv(Identifier atlasLocation, float u, float v) {
+		LowAtlasRemap remap = lowAtlasRemap;
+		if (!TextureAtlas.LOCATION_BLOCKS.equals(atlasLocation) || remap == null) {
+			return new float[] {u, v};
+		}
+		return remap.map(u, v);
+	}
+
+	public static float[] remapLowAtlasUv(
+		Identifier atlasLocation, float u, float v, boolean upperBound
+	) {
+		LowAtlasRemap remap = lowAtlasRemap;
+		if (!TextureAtlas.LOCATION_BLOCKS.equals(atlasLocation) || remap == null) {
+			return new float[] {u, v};
+		}
+		return remap.map(u, v, upperBound);
+	}
+
+	public static void logScreenOverlayRemap(
+		Identifier atlasLocation, float u0, float v0, float u1, float v1
+	) {
+		LowAtlasRemap remap = lowAtlasRemap;
+		if (SCREEN_OVERLAY_REMAP_LOGGED.compareAndSet(false, true)) {
+			if (remap == null) {
+				AtlasStream.LOGGER.info(
+					"Screen overlay remap called without a remap: atlas={}, source=({},{})-({},{})",
+					atlasLocation, u0, v0, u1, v1
+				);
+				return;
+			}
+
+			float[] first = remap.map(u0, v0);
+			float[] second = remap.map(u1, v1, true);
+			AtlasStream.LOGGER.info(
+				"Screen overlay remap: atlas={}, source=({},{})-({},{ }), destination=({},{})-({},{ }), "
+					+ "sourceSprite={}, destinationSprite={}",
+				atlasLocation, u0, v0, u1, v1, first[0], first[1], second[0], second[1],
+				remap.placementAt(u0, v0), remap.placementAt(u1, v1, true)
+			);
+		}
+	}
+
+	public static void logFireOverlayRemap(TextureAtlasSprite sprite) {
+		LowAtlasRemap remap = lowAtlasRemap;
+		if (remap != null && SCREEN_OVERLAY_REMAP_LOGGED.compareAndSet(false, true)) {
+			float[] first = remap.map(sprite.getU0(), sprite.getV0());
+			float[] second = remap.map(sprite.getU1(), sprite.getV1(), true);
+			Identifier placement = remap.placementAt(sprite.getU0(), sprite.getV0());
+			AtlasStream.LOGGER.info(
+				"Fire screen overlay remap: sprite={} atlas={} source0={} sourceV0={} "
+					+ "sourceU1={} sourceV1={} destinationU0={} destinationV0={} "
+					+ "destinationU1={} destinationV1={} placement={}",
+				sprite.contents().name(), sprite.atlasLocation(),
+				sprite.getU0(), sprite.getV0(), sprite.getU1(), sprite.getV1(),
+				first[0], first[1], second[0], second[1],
+				placement
+			);
+		}
+	}
+
 	public static void buildAndEnable(
 		TextureAtlas atlas,
 		ResourceManager resourceManager,
@@ -110,6 +173,81 @@ public final class AtlasRuntimeState {
 		boolean enableDistancePreview
 	) {
 		buildAndEnable(atlas, resourceManager, source::sendFeedback, source::sendError, enableDistancePreview);
+	}
+
+	private static final class LowAtlasRemap {
+		private final float sourceWidth;
+		private final float sourceHeight;
+		private final float destinationWidth;
+		private final float destinationHeight;
+		private final List<com.malaron.atlasstream.atlas.LowAtlasPacker.Placement> placements;
+
+		private LowAtlasRemap(
+			int sourceWidth,
+			int sourceHeight,
+			int destinationWidth,
+			int destinationHeight,
+			com.malaron.atlasstream.atlas.LowAtlasPacker.Layout layout
+		) {
+			this.sourceWidth = sourceWidth;
+			this.sourceHeight = sourceHeight;
+			this.destinationWidth = destinationWidth;
+			this.destinationHeight = destinationHeight;
+			this.placements = List.copyOf(layout.placements().values());
+		}
+
+		private float[] map(float u, float v) {
+			return map(u, v, false);
+		}
+
+		private float[] map(float u, float v, boolean upperBound) {
+			double x = u * sourceWidth;
+			double y = v * sourceHeight;
+			if (upperBound) {
+				x = Math.nextDown(x);
+				y = Math.nextDown(y);
+			}
+			for (com.malaron.atlasstream.atlas.LowAtlasPacker.Placement placement : placements) {
+				var source = placement.sprite();
+				double localX = x - source.sourceX();
+				double localY = y - source.sourceY();
+				if (localX < -source.paddingX() || localY < -source.paddingY()
+						|| localX > source.width() + source.paddingX()
+						|| localY > source.height() + source.paddingY()) {
+					continue;
+				}
+				float[] mapped = new float[] {
+					(float) ((placement.x() + placement.paddingX() + localX / placement.factor()) / destinationWidth),
+					(float) ((placement.y() + placement.paddingY() + localY / placement.factor()) / destinationHeight)
+				};
+				return mapped;
+			}
+			return new float[] {u, v};
+		}
+
+		private Identifier placementAt(float u, float v) {
+			return placementAt(u, v, false);
+		}
+
+		private Identifier placementAt(float u, float v, boolean upperBound) {
+			double x = u * sourceWidth;
+			double y = v * sourceHeight;
+			if (upperBound) {
+				x = Math.nextDown(x);
+				y = Math.nextDown(y);
+			}
+			for (var placement : placements) {
+				var source = placement.sprite();
+				double localX = x - source.sourceX();
+				double localY = y - source.sourceY();
+				if (localX >= -source.paddingX() && localY >= -source.paddingY()
+						&& localX <= source.width() + source.paddingX()
+						&& localY <= source.height() + source.paddingY()) {
+					return source.identifier();
+				}
+			}
+			return null;
+		}
 	}
 
 	public static void buildAndEnable(
@@ -151,6 +289,7 @@ public final class AtlasRuntimeState {
 			throw exception;
 		}
 
+		SCREEN_OVERLAY_REMAP_LOGGED.set(false);
 		CompletableFuture.supplyAsync(() -> {
 			try {
 				return createLowAtlas(
@@ -338,6 +477,12 @@ public final class AtlasRuntimeState {
 		return view != null && view == lowResolutionTextureView;
 	}
 
+	public static GpuTextureView lowAtlasTextureForView(GpuTextureView view) {
+		LowAtlasRemap remap = lowAtlasRemap;
+		GpuTextureView low = lowResolutionTextureView;
+		return remap != null && low != null && view != null ? low : view;
+	}
+
 	public static long virtualTextureGeneration() {
 		VirtualTextureGpuPageTable pageTable = virtualTextureGpuPageTable;
 		return pageTable == null ? Long.MIN_VALUE : pageTable.layout().atlasGeneration();
@@ -510,6 +655,7 @@ public final class AtlasRuntimeState {
 		if (atlas == null || nearAtlas == null || !SodiumTerrainIntegration.isIrisShaderPackInUse()) {
 			return;
 		}
+
 		var finder = ((net.fabricmc.fabric.api.client.renderer.v1.sprite.FabricTextureAtlas) atlas).spriteFinder();
 		Set<net.minecraft.client.renderer.texture.TextureAtlasSprite> sprites = new java.util.HashSet<>();
 		mesh.forEach(quad -> {
@@ -523,6 +669,81 @@ public final class AtlasRuntimeState {
 		for (var sprite : sprites) {
 			recordSpriteUsage(sprite);
 		}
+	}
+
+	public static synchronized boolean useNearAtlasForScreenEffect(TextureAtlasSprite sprite) {
+		NearAtlas near = nearAtlas;
+		if (near == null || !near.isUsable()
+				|| !TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
+			return false;
+		}
+		near.touch(sprite);
+		return near.isResident(sprite) && (!near.isCompact() || vanillaRemapAvailable);
+	}
+
+	public static synchronized boolean useNearAtlasForScreenEffect(
+		Identifier atlasLocation, float u0, float v0, float u1, float v1
+	) {
+		TextureAtlas atlas = previewedAtlas;
+		NearAtlas near = nearAtlas;
+		if (atlas == null || near == null || !near.isUsable()
+				|| !TextureAtlas.LOCATION_BLOCKS.equals(atlasLocation)) {
+			return false;
+		}
+		float centerU = (u0 + u1) * 0.5F;
+		float centerV = (v0 + v1) * 0.5F;
+		for (TextureAtlasSprite sprite : ((TextureAtlasAccessor) atlas).atlasStream$getSprites()) {
+			if (centerU >= sprite.getU0() && centerU < sprite.getU1()
+					&& centerV >= sprite.getV0() && centerV < sprite.getV1()) {
+				return useNearAtlasForScreenEffect(sprite);
+			}
+		}
+		return false;
+	}
+
+	public static GpuTextureView screenEffectNearAtlasView() {
+		NearAtlas near = nearAtlas;
+		return screenEffectUsesNearAtlas && near != null && near.isUsable() ? near.albedoView() : null;
+	}
+
+	public static float[] screenEffectUv(
+		Identifier atlasLocation, float u, float v, boolean upperBound, boolean useNear
+	) {
+		if (!useNear) {
+			return remapLowAtlasUv(atlasLocation, u, v, upperBound);
+		}
+		TextureAtlas atlas = previewedAtlas;
+		NearAtlas near = nearAtlas;
+		if (atlas == null || near == null) {
+			return new float[] {u, v};
+		}
+		float adjustedU = u;
+		float adjustedV = v;
+		if (upperBound) {
+			adjustedU = Math.nextDown(u);
+			adjustedV = Math.nextDown(v);
+		}
+		for (TextureAtlasSprite sprite : ((TextureAtlasAccessor) atlas).atlasStream$getSprites()) {
+			if (adjustedU >= sprite.getU0() && adjustedU <= sprite.getU1()
+					&& adjustedV >= sprite.getV0() && adjustedV <= sprite.getV1()) {
+				return near.remapUv(sprite, adjustedU, adjustedV);
+			}
+		}
+		return new float[] {adjustedU, adjustedV};
+	}
+
+	public static float[] screenEffectUv(TextureAtlasSprite sprite, float u, float v, boolean upperBound) {
+		NearAtlas near = nearAtlas;
+		if (near == null || !near.isResident(sprite)) {
+			return remapLowAtlasUv(sprite.atlasLocation(), u, v, upperBound);
+		}
+		float adjustedU = upperBound ? Math.nextDown(u) : u;
+		float adjustedV = upperBound ? Math.nextDown(v) : v;
+		return near.remapUv(sprite, adjustedU, adjustedV);
+	}
+
+	public static void setScreenEffectUsesNearAtlas(boolean useNearAtlas) {
+		screenEffectUsesNearAtlas = useNearAtlas;
 	}
 
 	public static boolean isNearAtlasWarm() {
@@ -2058,6 +2279,9 @@ public final class AtlasRuntimeState {
 				0
 			);
 			previewedAtlas = atlas;
+			lowAtlasRemap = new LowAtlasRemap(
+				atlasWidth, atlasHeight, image.layout().width(), image.layout().height(), image.layout()
+			);
 			lowAtlasStreamedMipLevels = image.layout().placements().values().stream()
 				.mapToInt(placement -> Integer.numberOfTrailingZeros(placement.factor()))
 				.max()
@@ -2348,6 +2572,7 @@ public final class AtlasRuntimeState {
 		closeAnimatedSprites(animatedSprites);
 		animatedSprites = List.of();
 		lowAtlasStreamedMipLevels = 0;
+		lowAtlasRemap = null;
 		closeLowAtlasRemap();
 		animatedStateMismatchLogged = false;
 		GpuTextureView textureView = lowResolutionTextureView;
