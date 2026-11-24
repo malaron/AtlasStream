@@ -2503,7 +2503,9 @@ public final class AtlasRuntimeState {
 					nearAtlas = created;
 					nearAtlasUnavailable = created == null;
 				} else {
-					nearAtlasUnavailable = false;
+					// An original-layout low atlas is already the correct all-distance Iris texture. The lack of a
+					// near atlas is intentional here, not a shader-switch transition that needs another reload.
+					nearAtlasUnavailable = image.isOriginalLayout();
 				}
 				if (image.isOriginalLayout()) {
 					AtlasStream.LOGGER.info(
