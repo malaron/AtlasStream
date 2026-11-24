@@ -2710,9 +2710,11 @@ public final class AtlasRuntimeState {
 			animatedSprites = image.transferAnimatedSprites();
 			animatedStateMismatchLogged = false;
 			if (releaseHighResolutionAtlas) {
-				Object pbrHolder = image.pbrImages() != null || image.isOriginalLayout()
-					? IrisPbrAtlasReducer.detachHolder(highResolutionTexture)
-					: null;
+				Object pbrHolder = image.isOriginalLayout()
+					? IrisPbrAtlasReducer.holder(highResolutionTexture)
+					: image.pbrImages() != null
+						? IrisPbrAtlasReducer.detachHolder(highResolutionTexture)
+						: null;
 				if (image.pbrImages() != null) {
 					NearAtlas created = NearAtlas.create(
 						atlasWidth,
