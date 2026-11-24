@@ -124,7 +124,7 @@ vec2 atlasStreamLowRemap(vec2 uv) {
 vec2 atlasStreamAtlasRemap(vec2 uv, vec2 anchor) {
     ivec2 remapSize = textureSize(u_AtlasStreamNearRemap, 0);
     if (remapSize.x <= 1) {
-        return atlasStreamLowRemap(uv);
+        return uv;
     }
     vec4 header0 = texelFetch(u_AtlasStreamNearRemap, ivec2(0, remapSize.y - 1), 0);
     ivec2 compactSize = ivec2(
@@ -132,12 +132,27 @@ vec2 atlasStreamAtlasRemap(vec2 uv, vec2 anchor) {
         floor(header0.b * 255.0 + 0.5) + floor(header0.a * 255.0 + 0.5) * 256.0
     ) + 1;
     if (textureSize(gtexture, 0) != compactSize) {
-        return atlasStreamLowRemap(uv);
+        return uv;
     }
-    return atlasStreamLowRemap(atlasStreamNearRemap(uv, anchor));
+    return atlasStreamNearRemap(uv, anchor);
 }
 vec2 atlasStreamAtlasRemap(vec2 uv) {
     return atlasStreamAtlasRemap(uv, uv);
+}
+vec2 atlasStreamTerrainRemap(vec2 uv, vec2 anchor) {
+    ivec2 remapSize = textureSize(u_AtlasStreamNearRemap, 0);
+    vec4 header0 = texelFetch(u_AtlasStreamNearRemap, ivec2(0, remapSize.y - 1), 0);
+    ivec2 compactSize = ivec2(
+        floor(header0.r * 255.0 + 0.5) + floor(header0.g * 255.0 + 0.5) * 256.0,
+        floor(header0.b * 255.0 + 0.5) + floor(header0.a * 255.0 + 0.5) * 256.0
+    ) + 1;
+    if (remapSize.x > 1 && textureSize(gtexture, 0) == compactSize) {
+        return atlasStreamNearRemap(uv, anchor);
+    }
+    return atlasStreamLowRemap(uv);
+}
+vec2 atlasStreamTerrainRemap(vec2 uv) {
+    return atlasStreamTerrainRemap(uv, uv);
 }
 """;
 
@@ -205,7 +220,7 @@ vec2 atlasStreamAtlasRemap(vec2 uv) {
 			String replaced = source.substring(0, function) + atlasFunctions + source.substring(function);
 			replaced = replaced.replace(
 				TEXCOORD_RETURN,
-				"return atlasStreamAtlasRemap(vec2(a_TexCoord & TEXTURE_MAX_VALUE) / float(TEXTURE_MAX_COORD));"
+				"return atlasStreamTerrainRemap(vec2(a_TexCoord & TEXTURE_MAX_VALUE) / float(TEXTURE_MAX_COORD));"
 			);
 			// The sprite's mid coordinate is a separate attribute in layout space; packs compare it with the diffuse
 			// UV (for example to clamp to the sprite), so it has to move to the compact atlas as well.
@@ -214,7 +229,7 @@ vec2 atlasStreamAtlasRemap(vec2 uv) {
 				match -> {
 					midCount[0]++;
 					return java.util.regex.Matcher.quoteReplacement(
-						"atlasStreamAtlasRemap(vec2(mc_midTexCoord.xy) * " + match.group(1) + ")"
+						"atlasStreamTerrainRemap(vec2(mc_midTexCoord.xy) * " + match.group(1) + ")"
 					);
 				}
 			);
