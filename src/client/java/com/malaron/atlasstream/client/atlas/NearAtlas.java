@@ -286,6 +286,10 @@ public final class NearAtlas implements AutoCloseable {
 		return !closed && !failed;
 	}
 
+	boolean isResident(TextureAtlasSprite sprite) {
+		return isUsable() && resident.containsKey(sprite);
+	}
+
 	public static long residencyRevision() {
 		return RESIDENCY_REVISION.get();
 	}

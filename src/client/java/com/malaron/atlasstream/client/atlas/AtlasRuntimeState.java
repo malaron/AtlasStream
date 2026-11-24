@@ -84,6 +84,7 @@ public final class AtlasRuntimeState {
 	private static volatile GpuTexture lowAtlasRemapTexture;
 	private static volatile GpuTextureView lowAtlasRemapTextureView;
 	private static volatile LowAtlasRemap lowAtlasRemap;
+	private static volatile boolean screenEffectUsesNearAtlas;
 	private static final AtomicBoolean SCREEN_OVERLAY_REMAP_LOGGED = new AtomicBoolean();
 	private static volatile VirtualTextureGpuPageTable virtualTextureGpuPageTable;
 	private static volatile VirtualTextureTileBuilder virtualTextureTileBuilder;
@@ -654,6 +655,7 @@ public final class AtlasRuntimeState {
 		if (atlas == null || nearAtlas == null || !SodiumTerrainIntegration.isIrisShaderPackInUse()) {
 			return;
 		}
+
 		var finder = ((net.fabricmc.fabric.api.client.renderer.v1.sprite.FabricTextureAtlas) atlas).spriteFinder();
 		Set<net.minecraft.client.renderer.texture.TextureAtlasSprite> sprites = new java.util.HashSet<>();
 		mesh.forEach(quad -> {
@@ -667,6 +669,45 @@ public final class AtlasRuntimeState {
 		for (var sprite : sprites) {
 			recordSpriteUsage(sprite);
 		}
+	}
+
+	public static synchronized boolean useNearAtlasForScreenEffect(TextureAtlasSprite sprite) {
+		NearAtlas near = nearAtlas;
+		if (near == null || !near.isUsable()
+				|| !TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
+			return false;
+		}
+		near.touch(sprite);
+		return near.isResident(sprite) && (!near.isCompact() || vanillaRemapAvailable);
+	}
+
+	public static synchronized boolean useNearAtlasForScreenEffect(
+		Identifier atlasLocation, float u0, float v0, float u1, float v1
+	) {
+		TextureAtlas atlas = previewedAtlas;
+		NearAtlas near = nearAtlas;
+		if (atlas == null || near == null || !near.isUsable()
+				|| !TextureAtlas.LOCATION_BLOCKS.equals(atlasLocation)) {
+			return false;
+		}
+		float centerU = (u0 + u1) * 0.5F;
+		float centerV = (v0 + v1) * 0.5F;
+		for (TextureAtlasSprite sprite : ((TextureAtlasAccessor) atlas).atlasStream$getSprites()) {
+			if (centerU >= sprite.getU0() && centerU < sprite.getU1()
+					&& centerV >= sprite.getV0() && centerV < sprite.getV1()) {
+				return useNearAtlasForScreenEffect(sprite);
+			}
+		}
+		return false;
+	}
+
+	public static GpuTextureView screenEffectNearAtlasView() {
+		NearAtlas near = nearAtlas;
+		return screenEffectUsesNearAtlas && near != null && near.isUsable() ? near.albedoView() : null;
+	}
+
+	public static void setScreenEffectUsesNearAtlas(boolean useNearAtlas) {
+		screenEffectUsesNearAtlas = useNearAtlas;
 	}
 
 	public static boolean isNearAtlasWarm() {
