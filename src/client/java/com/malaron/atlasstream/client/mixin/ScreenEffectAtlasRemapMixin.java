@@ -33,6 +33,7 @@ public abstract class ScreenEffectAtlasRemapMixin {
 		int color,
 		Operation<Void> original
 	) {
+		AtlasRuntimeState.logScreenOverlayRemap(atlasLocation, u0, v0, u1, v1);
 		float[] first = AtlasRuntimeState.remapLowAtlasUv(atlasLocation, u0, v0);
 		float[] second = AtlasRuntimeState.remapLowAtlasUv(atlasLocation, u1, v1, true);
 		original.call(
@@ -60,6 +61,7 @@ public abstract class ScreenEffectAtlasRemapMixin {
 		int color,
 		Operation<Void> original
 	) {
+		AtlasRuntimeState.logFireOverlayRemap(sprite);
 		float[] first = AtlasRuntimeState.remapLowAtlasUv(
 			sprite.atlasLocation(), sprite.getU1(), sprite.getV1(), true
 		);

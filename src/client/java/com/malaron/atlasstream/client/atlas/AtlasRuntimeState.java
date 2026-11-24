@@ -84,6 +84,7 @@ public final class AtlasRuntimeState {
 	private static volatile GpuTexture lowAtlasRemapTexture;
 	private static volatile GpuTextureView lowAtlasRemapTextureView;
 	private static volatile LowAtlasRemap lowAtlasRemap;
+	private static final AtomicBoolean SCREEN_OVERLAY_REMAP_LOGGED = new AtomicBoolean();
 	private static volatile VirtualTextureGpuPageTable virtualTextureGpuPageTable;
 	private static volatile VirtualTextureTileBuilder virtualTextureTileBuilder;
 	private static volatile VirtualTextureGpuCache virtualTextureGpuCache;
@@ -120,6 +121,48 @@ public final class AtlasRuntimeState {
 			return new float[] {u, v};
 		}
 		return remap.map(u, v, upperBound);
+	}
+
+	public static void logScreenOverlayRemap(
+		Identifier atlasLocation, float u0, float v0, float u1, float v1
+	) {
+		LowAtlasRemap remap = lowAtlasRemap;
+		if (SCREEN_OVERLAY_REMAP_LOGGED.compareAndSet(false, true)) {
+			if (remap == null) {
+				AtlasStream.LOGGER.info(
+					"Screen overlay remap called without a remap: atlas={}, source=({},{})-({},{})",
+					atlasLocation, u0, v0, u1, v1
+				);
+				return;
+			}
+
+			float[] first = remap.map(u0, v0);
+			float[] second = remap.map(u1, v1, true);
+			AtlasStream.LOGGER.info(
+				"Screen overlay remap: atlas={}, source=({},{})-({},{ }), destination=({},{})-({},{ }), "
+					+ "sourceSprite={}, destinationSprite={}",
+				atlasLocation, u0, v0, u1, v1, first[0], first[1], second[0], second[1],
+				remap.placementAt(u0, v0), remap.placementAt(u1, v1, true)
+			);
+		}
+	}
+
+	public static void logFireOverlayRemap(TextureAtlasSprite sprite) {
+		LowAtlasRemap remap = lowAtlasRemap;
+		if (remap != null && SCREEN_OVERLAY_REMAP_LOGGED.compareAndSet(false, true)) {
+			float[] first = remap.map(sprite.getU0(), sprite.getV0());
+			float[] second = remap.map(sprite.getU1(), sprite.getV1(), true);
+			Identifier placement = remap.placementAt(sprite.getU0(), sprite.getV0());
+			AtlasStream.LOGGER.info(
+				"Fire screen overlay remap: sprite={} atlas={} source0={} sourceV0={} "
+					+ "sourceU1={} sourceV1={} destinationU0={} destinationV0={} "
+					+ "destinationU1={} destinationV1={} placement={}",
+				sprite.contents().name(), sprite.atlasLocation(),
+				sprite.getU0(), sprite.getV0(), sprite.getU1(), sprite.getV1(),
+				first[0], first[1], second[0], second[1],
+				placement
+			);
+		}
 	}
 
 	public static void buildAndEnable(
@@ -180,6 +223,30 @@ public final class AtlasRuntimeState {
 			}
 			return new float[] {u, v};
 		}
+
+		private Identifier placementAt(float u, float v) {
+			return placementAt(u, v, false);
+		}
+
+		private Identifier placementAt(float u, float v, boolean upperBound) {
+			double x = u * sourceWidth;
+			double y = v * sourceHeight;
+			if (upperBound) {
+				x = Math.nextDown(x);
+				y = Math.nextDown(y);
+			}
+			for (var placement : placements) {
+				var source = placement.sprite();
+				double localX = x - source.sourceX();
+				double localY = y - source.sourceY();
+				if (localX >= -source.paddingX() && localY >= -source.paddingY()
+						&& localX <= source.width() + source.paddingX()
+						&& localY <= source.height() + source.paddingY()) {
+					return source.identifier();
+				}
+			}
+			return null;
+		}
 	}
 
 	public static void buildAndEnable(
@@ -221,6 +288,7 @@ public final class AtlasRuntimeState {
 			throw exception;
 		}
 
+		SCREEN_OVERLAY_REMAP_LOGGED.set(false);
 		CompletableFuture.supplyAsync(() -> {
 			try {
 				return createLowAtlas(
@@ -406,6 +474,12 @@ public final class AtlasRuntimeState {
 
 	public static boolean isReducedBlockAtlasView(GpuTextureView view) {
 		return view != null && view == lowResolutionTextureView;
+	}
+
+	public static GpuTextureView lowAtlasTextureForView(GpuTextureView view) {
+		LowAtlasRemap remap = lowAtlasRemap;
+		GpuTextureView low = lowResolutionTextureView;
+		return remap != null && low != null && view != null ? low : view;
 	}
 
 	public static long virtualTextureGeneration() {

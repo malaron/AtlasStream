@@ -83,7 +83,12 @@ public abstract class PreparedItemVirtualTextureMixin {
 		at = @At(value = "INVOKE", target = "Lcom/mojang/renderpearl/api/commands/RenderPass;setUniform(Ljava/lang/String;Lcom/mojang/renderpearl/api/textures/GpuTextureView;Lcom/mojang/renderpearl/api/textures/GpuSampler;)V")
 	)
 	private void atlasStream$bindItemSamplers(RenderPass pass, String name, GpuTextureView view, GpuSampler sampler) {
-		pass.setUniform(name, view, sampler);
+		boolean blockScreenEffect = this.name().equals("block_screen_effect")
+			|| this.name().equals("fire_screen_effect");
+		GpuTextureView bound = blockScreenEffect && name.equals("Sampler0")
+			? AtlasRuntimeState.lowAtlasTextureForView(view)
+			: view;
+		pass.setUniform(name, bound, sampler);
 		if (atlasStream$virtualItem && name.equals("Sampler0")) {
 			var views = AtlasRuntimeState.virtualTextureSamplingViews(atlasStream$streamTiles);
 			pass.setUniform("u_VirtualTileAtlas", views.tileAtlas(), sampler);
