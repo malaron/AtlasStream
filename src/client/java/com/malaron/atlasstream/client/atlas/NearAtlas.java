@@ -552,7 +552,7 @@ public final class NearAtlas implements AutoCloseable {
 
 	private void freeSlot(Geometry g) {
 		if (compact) {
-			freeSlots.release(g.x - g.padX, g.y - g.padY, g.slotW, g.slotH);
+			freeSlots.release(g.x, g.y, g.slotW, g.slotH);
 		}
 	}
 
@@ -879,12 +879,7 @@ public final class NearAtlas implements AutoCloseable {
 					continue;
 				}
 				Geometry geometry = resident.get(victim);
-				free.release(
-					geometry.x - geometry.padX,
-					geometry.y - geometry.padY,
-					geometry.slotW,
-					geometry.slotH
-				);
+				free.release(geometry.x, geometry.y, geometry.slotW, geometry.slotH);
 				allocateFrom(free, key);
 				evict(victim);
 				if (needed.contains(victim)) {
@@ -1361,8 +1356,8 @@ public final class NearAtlas implements AutoCloseable {
 					int sourceX = Math.min(original.getWidth() - 1, (int) (((long) x * 2 + 1) * geometry.width / (2L * sw)));
 					int sourceY = Math.min(original.getHeight() - 1, (int) (((long) y * 2 + 1) * geometry.height / (2L * sh)));
 					pixel.clear();
-					GL11.glReadPixels((geometry.x >> level) + x,
-						(geometry.y >> level) + y, 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixel);
+					GL11.glReadPixels((geometry.x >> level) + padX + x,
+						(geometry.y >> level) + padY + y, 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixel);
 					int error = GL11.glGetError();
 					if (error != GL11.GL_NO_ERROR) {
 						throw new IllegalStateException("OpenGL error " + error + " reading sprite mip " + level);
@@ -1490,18 +1485,7 @@ public final class NearAtlas implements AutoCloseable {
 			}
 			return null;
 		}
-		return new Geometry(
-			slot[0] + padX,
-			slot[1] + padY,
-			w,
-			h,
-			padX,
-			padY,
-			sprite.getX(),
-			sprite.getY(),
-			slotW,
-			slotH
-		);
+		return new Geometry(slot[0], slot[1], w, h, padX, padY, sprite.getX(), sprite.getY(), slotW, slotH);
 	}
 
 	private List<LevelData> albedoLevels(TextureAtlasSprite sprite, Geometry geometry, int frameIndex) {
@@ -1614,14 +1598,7 @@ public final class NearAtlas implements AutoCloseable {
 				out[y * qw + x] = (pixel & 0xFF00FF00) | ((pixel >> 16) & 0xFF) | ((pixel & 0xFF) << 16);
 			}
 		}
-		return new LevelData(
-			level,
-			(geometry.x - geometry.padX) >> level,
-			(geometry.y - geometry.padY) >> level,
-			qw,
-			qh,
-			out
-		);
+		return new LevelData(level, geometry.x >> level, geometry.y >> level, qw, qh, out);
 	}
 
 	private void write(Layer layer, List<LevelData> levels) {
