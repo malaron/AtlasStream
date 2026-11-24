@@ -1492,6 +1492,17 @@ public final class AtlasRuntimeState {
 	// True while a reduced rebuild is guaranteed to follow a resource reload, so Iris's full-size blocks PBR atlases
 	// would be built only to be discarded. The rebuild registers reduced maps itself.
 	public static synchronized boolean shouldSkipIrisBlockPbrLoad(TextureAtlas atlas) {
+		int targetResolution = AtlasStreamClient.getConfig().targetResolution();
+		boolean alreadyAtTarget = ((TextureAtlasAccessor) atlas).atlasStream$getSprites().stream()
+			.allMatch(sprite -> Math.max(sprite.contents().width(), sprite.contents().height())
+				<= targetResolution);
+		if (alreadyAtTarget) {
+			AtlasStream.LOGGER.info(
+				"Keeping vanilla Iris block PBR atlases because every sprite already fits the {}px target",
+				targetResolution
+			);
+			return false;
+		}
 		return (reloadRebuildPending || (reloadBuildRunning && BUILDING.get()) || irisSwitchNeedsRebuild())
 			&& TextureAtlas.LOCATION_BLOCKS.equals(atlas.location())
 			&& SodiumTerrainIntegration.isIrisShaderPackInUse();
@@ -2286,6 +2297,10 @@ public final class AtlasRuntimeState {
 		int atlasMipLevels,
 		boolean releaseHighResolutionAtlas
 	) {
+		if (image.isOriginalLayout() && SodiumTerrainIntegration.isIrisShaderPackInUse()) {
+			activateOriginalIrisAtlas(atlas, highResolutionTexture);
+			return;
+		}
 		var device = RenderSystem.getDevice();
 		closeVirtualTextureGpuPageTable();
 		GpuTexture texture = device.createTexture(
@@ -2444,6 +2459,33 @@ public final class AtlasRuntimeState {
 				texture.close();
 			}
 		}
+
+	}
+
+	private static void activateOriginalIrisAtlas(TextureAtlas atlas, GpuTexture texture) {
+		GpuTextureView view = ((AbstractTextureAccessor) atlas).atlasStream$getTextureView();
+		if (texture == null || view == null) {
+			throw new IllegalStateException("The original Iris block atlas is unavailable");
+		}
+		closeVirtualTextureGpuPageTable();
+		if (nearAtlas != null) {
+			nearAtlas.close();
+			nearAtlas = null;
+		}
+		nearAtlasUnavailable = false;
+		lowAtlasRemap = null;
+		lowAtlasStreamedMipLevels = 0;
+		closeLowAtlasRemap();
+		lowResolutionTexture = texture;
+		lowResolutionTextureView = view;
+		previewedAtlas = atlas;
+		atlasOwnsLowResolutionTexture = false;
+		originalAtlasReleaseConfirmed = false;
+		reducedPbrAtlases = List.of();
+		animatedSprites = List.of();
+		AtlasStream.LOGGER.info(
+			"Atlas requires no reduction; keeping the original Iris albedo and PBR atlases unchanged"
+		);
 	}
 
 	public static void updateAnimatedFrames(TextureAtlas atlas) {
