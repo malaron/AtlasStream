@@ -1,0 +1,35 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*-mc*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v6
+      - name: validate gradle wrapper
+        uses: gradle/actions/wrapper-validation@v6
+      - name: setup jdk
+        uses: actions/setup-java@v5
+        with:
+          java-version: "25"
+          distribution: microsoft
+      - name: build
+        run: ./gradlew clean build
+      - name: publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            build/libs/atlasstream-*-mc*.jar \
+            --title "AtlasStream ${GITHUB_REF_NAME#v}" \
+            --generate-notes \
+            --prerelease \
+            --verify-tag
