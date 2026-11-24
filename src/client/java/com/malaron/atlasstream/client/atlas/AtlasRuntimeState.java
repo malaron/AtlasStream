@@ -92,7 +92,6 @@ public final class AtlasRuntimeState {
 	private static volatile GpuTextureView reloadFallbackRemapView;
 	private static volatile LowAtlasRemap reloadFallbackMapping;
 	private static volatile LowAtlasRemap lowAtlasRemap;
-	private static volatile boolean lowAtlasOriginalLayout;
 	private static volatile boolean screenEffectUsesNearAtlas;
 	private static final AtomicBoolean SCREEN_OVERLAY_REMAP_LOGGED = new AtomicBoolean();
 	private static volatile VirtualTextureGpuPageTable virtualTextureGpuPageTable;
@@ -525,10 +524,6 @@ public final class AtlasRuntimeState {
 
 	public static boolean isReducedBlockAtlasView(GpuTextureView view) {
 		return view != null && view == lowResolutionTextureView;
-	}
-
-	public static boolean isLowAtlasOriginalLayout() {
-		return lowAtlasOriginalLayout;
 	}
 
 	public static GpuTextureView lowAtlasTextureForView(GpuTextureView view) {
@@ -2703,7 +2698,6 @@ public final class AtlasRuntimeState {
 				0
 			);
 			previewedAtlas = atlas;
-			lowAtlasOriginalLayout = image.isOriginalLayout();
 			lowAtlasRemap = new LowAtlasRemap(
 				atlasWidth, atlasHeight, image.layout().width(), image.layout().height(), image.layout()
 			);
@@ -2801,7 +2795,6 @@ public final class AtlasRuntimeState {
 		}
 		nearAtlasUnavailable = false;
 		lowAtlasRemap = null;
-		lowAtlasOriginalLayout = false;
 		lowAtlasStreamedMipLevels = 0;
 		closeLowAtlasRemap();
 		lowResolutionTexture = texture;
@@ -3049,7 +3042,6 @@ public final class AtlasRuntimeState {
 		animatedSprites = List.of();
 		lowAtlasStreamedMipLevels = 0;
 		lowAtlasRemap = null;
-		lowAtlasOriginalLayout = false;
 		closeLowAtlasRemap();
 		animatedStateMismatchLogged = false;
 		GpuTextureView textureView = lowResolutionTextureView;
