@@ -1857,7 +1857,14 @@ public final class AtlasRuntimeState {
 				targetResolution, loadedSprites.get(), layout.width(), layout.height(), lowMipLevelCount,
 				skippedSprites.get()
 			);
-			return new LowAtlasImage(mipLevels, layout, remap, animatedSpriteData, pbrImages);
+			return new LowAtlasImage(
+				mipLevels,
+				layout,
+				remap,
+				animatedSpriteData,
+				pbrImages,
+				preserveOriginalMips
+			);
 		} catch (RuntimeException | Error exception) {
 			mipLevels.forEach(NativeImage::close);
 			closeAnimatedSprites(animatedSpriteData);
@@ -2383,12 +2390,14 @@ public final class AtlasRuntimeState {
 					? IrisPbrAtlasReducer.detachHolder(highResolutionTexture)
 					: null;
 				if (image.pbrImages() != null) {
-					NearAtlas created = NearAtlas.create(
-						atlasWidth,
-						atlasHeight,
-						atlasMipLevels,
-						net.minecraft.client.Minecraft.getInstance().getResourceManager()
-					);
+					NearAtlas created = image.isOriginalLayout()
+						? null
+						: NearAtlas.create(
+							atlasWidth,
+							atlasHeight,
+							atlasMipLevels,
+							net.minecraft.client.Minecraft.getInstance().getResourceManager()
+						);
 					if (created != null && created.isCompact() && NearAtlas.hybridRequested()) {
 						AtlasStream.LOGGER.info(
 							"Repacked low atlas uses compact near-atlas streaming instead of the layout-based hybrid fallback"
@@ -2398,7 +2407,14 @@ public final class AtlasRuntimeState {
 						nearAtlas.close();
 					}
 					nearAtlas = created;
-					nearAtlasUnavailable = created == null;
+					nearAtlasUnavailable = created == null && !image.isOriginalLayout();
+					if (image.isOriginalLayout()) {
+						AtlasStream.LOGGER.info(
+							"Low atlas preserves the original {}x{} layout; Iris terrain uses it for all distances",
+							atlasWidth,
+							atlasHeight
+						);
+					}
 				} else {
 					nearAtlasUnavailable = false;
 				}
@@ -3354,6 +3370,7 @@ public final class AtlasRuntimeState {
 		private final NativeImage remap;
 		private final List<AnimatedSpriteData> animatedSprites;
 		private final IrisPbrAtlasReducer.Images pbrImages;
+		private final boolean originalLayout;
 		private boolean animationsTransferred;
 
 		private LowAtlasImage(
@@ -3361,13 +3378,15 @@ public final class AtlasRuntimeState {
 			com.malaron.atlasstream.atlas.LowAtlasPacker.Layout layout,
 			NativeImage remap,
 			List<AnimatedSpriteData> animatedSprites,
-			IrisPbrAtlasReducer.Images pbrImages
+			IrisPbrAtlasReducer.Images pbrImages,
+			boolean originalLayout
 		) {
 			this.mipLevels = List.copyOf(mipLevels);
 			this.layout = layout;
 			this.remap = remap;
 			this.animatedSprites = List.copyOf(animatedSprites);
 			this.pbrImages = pbrImages;
+			this.originalLayout = originalLayout;
 		}
 
 		private IrisPbrAtlasReducer.Images pbrImages() {
@@ -3380,6 +3399,10 @@ public final class AtlasRuntimeState {
 
 		private com.malaron.atlasstream.atlas.LowAtlasPacker.Layout layout() {
 			return layout;
+		}
+
+		private boolean isOriginalLayout() {
+			return originalLayout;
 		}
 
 		private NativeImage remap() {
