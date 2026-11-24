@@ -15,8 +15,9 @@ uniform sampler2D u_VirtualPageTable;
 uniform sampler2D u_VirtualAtlasMetadata;
 uniform sampler2D u_AtlasStreamLowRemap;
 
-vec2 atlasStreamMapLowAtlas(vec2 uv) {
+vec2 atlasStreamMapLowAtlas(vec2 uv, out vec2 scale) {
     ivec2 remapSize = textureSize(u_AtlasStreamLowRemap, 0);
+    scale = vec2(1.0);
     if (remapSize.x <= 3) {
         return uv;
     }
@@ -58,7 +59,12 @@ vec2 atlasStreamMapLowAtlas(vec2 uv) {
         floor(destinationEntry.b * 255.0 + 0.5) + floor(destinationEntry.a * 255.0 + 0.5) * 256.0
     );
     float factor = exp2(float(encodedFactor - 1));
+    scale = sourceSize / (destinationSize * factor);
     return (destinationOriginPixels + (sourceTexel - sourceOriginPixels) / factor) / destinationSize;
+}
+vec2 atlasStreamMapLowAtlas(vec2 uv) {
+    vec2 scale;
+    return atlasStreamMapLowAtlas(uv, scale);
 }
 
 bool atlasStreamLookupVirtualTile(
@@ -128,9 +134,10 @@ vec4 atlasStreamSampleVirtualOrAtlas(vec2 uv, vec2 du, vec2 dv) {
             dv * atlasMipSize / cacheSize
         );
     }
-    vec2 lowUv = atlasStreamMapLowAtlas(uv);
-    vec2 lowDu = atlasStreamMapLowAtlas(uv + du) - lowUv;
-    vec2 lowDv = atlasStreamMapLowAtlas(uv + dv) - lowUv;
+    vec2 lowScale;
+    vec2 lowUv = atlasStreamMapLowAtlas(uv, lowScale);
+    vec2 lowDu = du * lowScale;
+    vec2 lowDv = dv * lowScale;
     return textureGrad(u_BlockTex, lowUv, lowDu, lowDv);
 }
 """;

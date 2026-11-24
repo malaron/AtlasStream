@@ -403,9 +403,15 @@ public final class AtlasRuntimeState {
 							+ " (target " + AtlasStreamClient.getConfig().targetResolution() + "px)."
 					)
 				);
-				setBuildPhase(enableDistancePreview
-					? "Atlas ready; streaming nearby detail..."
-					: "Low-resolution atlas ready");
+				if (enableDistancePreview && isNearAtlasActive() && !isNearAtlasWarm()) {
+					setBuildPhase("Atlas ready; streaming nearby high-resolution detail...");
+				} else if (!enableDistancePreview) {
+					setBuildPhase("Low-resolution atlas ready");
+					clearBuildPhase();
+				} else {
+					setBuildPhase("Atlas ready");
+					clearBuildPhase();
+				}
 			} catch (RuntimeException exception) {
 				AtlasStream.LOGGER.error("Could not activate low-resolution atlas preview", exception);
 				errors.accept(
@@ -1235,7 +1241,9 @@ public final class AtlasRuntimeState {
 		NearAtlas near = nearAtlas;
 		if (near != null) {
 			near.service();
+			serviceBuildPhaseCompletion();
 		}
+
 		VirtualTextureGpuPageTable pageTable = virtualTextureGpuPageTable;
 		VirtualTextureLayout layout = virtualTextureLayout;
 		if (!isDistancePreviewEnabled()
@@ -1312,6 +1320,13 @@ public final class AtlasRuntimeState {
 			serviceAnimatedTiles(animatedCache, virtualTextureTileBuilder);
 		}
 		ItemStreamDiagnostics.sampleCacheActivity();
+	}
+
+	private static void serviceBuildPhaseCompletion() {
+		NearAtlas near = nearAtlas;
+		if (near != null && near.isUsable() && near.isWarm()) {
+			clearBuildPhase();
+		}
 	}
 
 	public static synchronized VirtualTextureCacheStatus virtualTextureCacheStatus() {

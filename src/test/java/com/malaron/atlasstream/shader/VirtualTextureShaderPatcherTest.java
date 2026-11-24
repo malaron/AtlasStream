@@ -35,7 +35,9 @@ void main() {
 		assertTrue(patched.contains("uniform sampler2D u_VirtualPageTable;"));
 		assertTrue(patched.contains("uniform sampler2D u_VirtualAtlasMetadata;"));
 		assertTrue(patched.contains("textureGrad(u_BlockTex, lowUv, lowDu, lowDv)"));
-		assertTrue(patched.contains("atlasStreamMapLowAtlas(uv)"));
+		assertTrue(patched.contains("atlasStreamMapLowAtlas(uv, lowScale)"));
+		assertTrue(patched.contains("vec2 lowDu = du * lowScale;"));
+		assertFalse(patched.contains("atlasStreamMapLowAtlas(uv + du)"));
 		assertTrue(patched.contains("uniform sampler2D u_AtlasStreamLowRemap;"));
 		assertTrue(patched.contains("atlasStreamSampleVirtualOrAtlas(uv, du, dv)"));
 		assertTrue(patched.contains("atlasStreamSampleVirtualOrAtlas(sampleUV, dFdx(uv), dFdy(uv))"));
