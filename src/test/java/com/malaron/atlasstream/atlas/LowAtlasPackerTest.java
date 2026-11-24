@@ -82,6 +82,17 @@ class LowAtlasPackerTest {
 		assertEquals(0, layout.placements().get(id("minecraft:large")).x());
 	}
 
+	@Test
+	void repacksOversizedVirtualAtlasesInsteadOfPreservingThem() {
+		LowAtlasPacker.Sprite sprite = new LowAtlasPacker.Sprite(
+			id("minecraft:block"), 16, 16, 512, 512, 1, 1
+		);
+
+		assertNull(LowAtlasPacker.preserveLayout(
+			List.of(sprite), 64, 32768, 16384
+		));
+	}
+
 	private static LowAtlasPacker.Sprite sprite(String identifier, int size) {
 		return new LowAtlasPacker.Sprite(id(identifier), 0, 0, size, size, 0, 0);
 	}

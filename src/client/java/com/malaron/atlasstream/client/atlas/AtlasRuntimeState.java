@@ -117,12 +117,24 @@ public final class AtlasRuntimeState {
 
 	public static GpuTextureView reloadFallbackView(TextureAtlas atlas) {
 		GpuTextureView fallback = reloadFallbackView;
-		return fallback != null && TextureAtlas.LOCATION_BLOCKS.equals(atlas.location()) ? fallback : null;
+		LowAtlasRemap mapping = reloadFallbackMapping;
+		TextureAtlasAccessor geometry = (TextureAtlasAccessor) atlas;
+		return fallback != null && mapping != null
+				&& TextureAtlas.LOCATION_BLOCKS.equals(atlas.location())
+				&& mapping.matches(geometry.atlasStream$getWidth(), geometry.atlasStream$getHeight())
+			? fallback
+			: null;
 	}
 
 	public static GpuTexture reloadFallbackTexture(TextureAtlas atlas) {
 		GpuTexture fallback = reloadFallbackTexture;
-		return fallback != null && TextureAtlas.LOCATION_BLOCKS.equals(atlas.location()) ? fallback : null;
+		LowAtlasRemap mapping = reloadFallbackMapping;
+		TextureAtlasAccessor geometry = (TextureAtlasAccessor) atlas;
+		return fallback != null && mapping != null
+				&& TextureAtlas.LOCATION_BLOCKS.equals(atlas.location())
+				&& mapping.matches(geometry.atlasStream$getWidth(), geometry.atlasStream$getHeight())
+			? fallback
+			: null;
 	}
 
 	public static void setBuildPhase(String message) {
@@ -228,6 +240,10 @@ public final class AtlasRuntimeState {
 			this.destinationWidth = destinationWidth;
 			this.destinationHeight = destinationHeight;
 			this.placements = List.copyOf(layout.placements().values());
+		}
+
+		private boolean matches(int width, int height) {
+			return Math.round(sourceWidth) == width && Math.round(sourceHeight) == height;
 		}
 
 		private float[] map(float u, float v) {
@@ -408,7 +424,7 @@ public final class AtlasRuntimeState {
 					)
 				);
 				if (enableDistancePreview && isNearAtlasActive() && !isNearAtlasWarm()) {
-					setBuildPhase("Low res atlas ready; nearby high-resolution detail stream beginning...");
+					setBuildPhase("Low res atlas ready; nearby high-resolution detail stream starting...");
 				} else if (!enableDistancePreview) {
 					setBuildPhase("Low-resolution atlas ready");
 					clearBuildPhase();
@@ -2014,6 +2030,16 @@ public final class AtlasRuntimeState {
 					return;
 				}
 				try {
+					NativeImage[] decodedMips = spriteMipImages.get(region.identifier());
+					if (!region.animated() && decodedMips != null && decodedMips.length > 0) {
+						if (preserveOriginalLayout && placement.factor() != 1) {
+							writeRepackedSpriteMips(mipLevels, decodedMips, region, placement);
+						} else if (!preserveOriginalLayout) {
+							writeRepackedSprite(atlas, decodedMips[0], region, placement);
+						}
+						loadedSprites.incrementAndGet();
+						return;
+					}
 					Identifier textureId = Identifier.fromNamespaceAndPath(
 						region.identifier().getNamespace(), "textures/" + region.identifier().getPath() + ".png"
 					);
@@ -2408,6 +2434,26 @@ public final class AtlasRuntimeState {
 		}
 	}
 
+	private static void writeRepackedSprite(
+		NativeImage atlas,
+		NativeImage source,
+		SpriteRegion region,
+		com.malaron.atlasstream.atlas.LowAtlasPacker.Placement placement
+	) {
+		int factor = placement.factor();
+		for (int destinationY = 0; destinationY < placement.paddedHeight(); destinationY++) {
+			int sourceY = (destinationY - placement.paddingY()) * factor;
+			for (int destinationX = 0; destinationX < placement.paddedWidth(); destinationX++) {
+				int sourceX = (destinationX - placement.paddingX()) * factor;
+				atlas.setPixel(
+					placement.x() + destinationX,
+					placement.y() + destinationY,
+					averageImagePixels(source, sourceX, sourceY, region.width(), region.height(), factor)
+				);
+			}
+		}
+	}
+
 	private static void writeOriginalSpriteMips(
 		List<NativeImage> destinationMips,
 		NativeImage[] sourceMips,
@@ -2492,6 +2538,55 @@ public final class AtlasRuntimeState {
 		}
 	}
 
+	private static void writeRepackedSpriteMips(
+		List<NativeImage> destinationMips,
+		NativeImage[] sourceMips,
+		SpriteRegion region,
+		com.malaron.atlasstream.atlas.LowAtlasPacker.Placement placement
+	) {
+		for (int level = 0; level < destinationMips.size(); level++) {
+			int requestedFactor = placement.factor() << level;
+			int sourceLevel = Math.min(
+				Integer.numberOfTrailingZeros(requestedFactor),
+				sourceMips.length - 1
+			);
+			NativeImage source = sourceMips[sourceLevel];
+			int residualFactor = Math.max(1, requestedFactor >> sourceLevel);
+			int mipDivisor = 1 << level;
+			int paddedWidth = Math.max(
+				Math.max(1, Math.ceilDiv(placement.width(), mipDivisor)),
+				Math.ceilDiv(placement.paddedWidth(), mipDivisor)
+			);
+			int paddedHeight = Math.max(
+				Math.max(1, Math.ceilDiv(placement.height(), mipDivisor)),
+				Math.ceilDiv(placement.paddedHeight(), mipDivisor)
+			);
+			int paddingX = placement.paddingX() >> level;
+			int paddingY = placement.paddingY() >> level;
+			int originX = placement.x() >> level;
+			int originY = placement.y() >> level;
+			NativeImage destination = destinationMips.get(level);
+			for (int y = 0; y < paddedHeight; y++) {
+				int sourceY = (y - paddingY) * residualFactor;
+				for (int x = 0; x < paddedWidth; x++) {
+					int sourceX = (x - paddingX) * residualFactor;
+					destination.setPixel(
+						originX + x,
+						originY + y,
+						averageImagePixels(
+							source,
+							sourceX,
+							sourceY,
+							Math.max(1, source.getWidth()),
+							Math.max(1, source.getHeight()),
+							residualFactor
+						)
+					);
+				}
+			}
+		}
+	}
+
 	private static int averageImagePixels(
 		BufferedImage source, int x, int y, int width, int height, int factor
 	) {
@@ -2504,6 +2599,35 @@ public final class AtlasRuntimeState {
 			int clampedY = Math.clamp(sampleY, 0, height - 1);
 			for (int sampleX = x; sampleX < x + factor; sampleX++) {
 				int argb = source.getRGB(Math.clamp(sampleX, 0, width - 1), clampedY);
+				int alpha = argb >>> 24;
+				alphaSum += alpha;
+				redSum += (argb >>> 16 & 0xFF) * (long) alpha;
+				greenSum += (argb >>> 8 & 0xFF) * (long) alpha;
+				blueSum += (argb & 0xFF) * (long) alpha;
+				count++;
+			}
+		}
+		if (alphaSum == 0) {
+			return 0;
+		}
+		return ((int) ((alphaSum + count / 2) / count) << 24)
+			| ((int) ((redSum + alphaSum / 2) / alphaSum) << 16)
+			| ((int) ((greenSum + alphaSum / 2) / alphaSum) << 8)
+			| (int) ((blueSum + alphaSum / 2) / alphaSum);
+	}
+
+	private static int averageImagePixels(
+		NativeImage source, int x, int y, int width, int height, int factor
+	) {
+		long alphaSum = 0;
+		long redSum = 0;
+		long greenSum = 0;
+		long blueSum = 0;
+		int count = 0;
+		for (int sampleY = y; sampleY < y + factor; sampleY++) {
+			int clampedY = Math.clamp(sampleY, 0, height - 1);
+			for (int sampleX = x; sampleX < x + factor; sampleX++) {
+				int argb = source.getPixel(Math.clamp(sampleX, 0, width - 1), clampedY);
 				int alpha = argb >>> 24;
 				alphaSum += alpha;
 				redSum += (argb >>> 16 & 0xFF) * (long) alpha;
@@ -3465,7 +3589,7 @@ public final class AtlasRuntimeState {
 		NativeImage mipLevel = new NativeImage(width, height, true);
 		try {
 			int previousLevel = level - 1;
-			for (SpriteRegion region : regions) {
+			regions.parallelStream().forEach(region -> {
 				int sourceLeft = Math.max(0, (region.x() - region.paddingX()) >> previousLevel);
 				int sourceTop = Math.max(0, (region.y() - region.paddingY()) >> previousLevel);
 				int sourceRight = Math.min(
@@ -3506,7 +3630,7 @@ public final class AtlasRuntimeState {
 						region.paddingY() >> level
 					);
 				}
-			}
+			});
 			return mipLevel;
 		} catch (RuntimeException | Error exception) {
 			mipLevel.close();

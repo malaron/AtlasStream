@@ -70,6 +70,10 @@ public final class LowAtlasPacker {
 		int sourceWidth,
 		int sourceHeight
 	) {
+		if (sourceWidth > maximumPreservedDimension()
+				|| sourceHeight > maximumPreservedDimension()) {
+			return null;
+		}
 		Map<Identifier, Placement> placements = new LinkedHashMap<>();
 		for (Sprite sprite : sprites) {
 			if (sprite.sourceX() < sprite.paddingX()
@@ -94,6 +98,10 @@ public final class LowAtlasPacker {
 			);
 		}
 		return new Layout(sourceWidth, sourceHeight, Map.copyOf(placements));
+	}
+
+	private static int maximumPreservedDimension() {
+		return 16384;
 	}
 
 	public static int reductionFactor(int width, int height, int targetResolution) {
