@@ -92,6 +92,7 @@ public final class AtlasRuntimeState {
 	private static volatile GpuTextureView reloadFallbackRemapView;
 	private static volatile LowAtlasRemap reloadFallbackMapping;
 	private static volatile LowAtlasRemap lowAtlasRemap;
+	private static volatile boolean lowAtlasOriginalLayout;
 	private static volatile boolean screenEffectUsesNearAtlas;
 	private static final AtomicBoolean SCREEN_OVERLAY_REMAP_LOGGED = new AtomicBoolean();
 	private static volatile VirtualTextureGpuPageTable virtualTextureGpuPageTable;
@@ -523,7 +524,11 @@ public final class AtlasRuntimeState {
 	}
 
 	public static boolean isReducedBlockAtlasView(GpuTextureView view) {
-		return view != null && view == lowResolutionTextureView;
+		return !lowAtlasOriginalLayout && view != null && view == lowResolutionTextureView;
+	}
+
+	public static boolean isLowAtlasOriginalLayout() {
+		return lowAtlasOriginalLayout;
 	}
 
 	public static GpuTextureView lowAtlasTextureForView(GpuTextureView view) {
@@ -2605,7 +2610,7 @@ public final class AtlasRuntimeState {
 		int atlasMipLevels,
 		boolean releaseHighResolutionAtlas
 	) {
-		if (image.requiresNoReduction() && SodiumTerrainIntegration.isIrisShaderPackInUse()) {
+		if (image.isOriginalLayout() && SodiumTerrainIntegration.isIrisShaderPackInUse()) {
 			activateOriginalIrisAtlas(atlas, highResolutionTexture);
 			return;
 		}
@@ -2795,6 +2800,7 @@ public final class AtlasRuntimeState {
 		}
 		nearAtlasUnavailable = false;
 		lowAtlasRemap = null;
+		lowAtlasOriginalLayout = true;
 		lowAtlasStreamedMipLevels = 0;
 		closeLowAtlasRemap();
 		lowResolutionTexture = texture;
@@ -3042,6 +3048,8 @@ public final class AtlasRuntimeState {
 		animatedSprites = List.of();
 		lowAtlasStreamedMipLevels = 0;
 		lowAtlasRemap = null;
+		boolean originalAtlasResident = lowAtlasOriginalLayout;
+		lowAtlasOriginalLayout = false;
 		closeLowAtlasRemap();
 		animatedStateMismatchLogged = false;
 		GpuTextureView textureView = lowResolutionTextureView;
@@ -3050,10 +3058,10 @@ public final class AtlasRuntimeState {
 		lowResolutionTexture = null;
 		boolean atlasOwnsTexture = atlasOwnsLowResolutionTexture;
 		atlasOwnsLowResolutionTexture = false;
-		if (!atlasOwnsTexture && textureView != null) {
+		if (!originalAtlasResident && !atlasOwnsTexture && textureView != null) {
 			textureView.close();
 		}
-		if (!atlasOwnsTexture && texture != null) {
+		if (!originalAtlasResident && !atlasOwnsTexture && texture != null) {
 			texture.close();
 		}
 		VirtualTextureMetadataTexture metadata = virtualTextureMetadataTexture;
