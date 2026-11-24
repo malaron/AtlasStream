@@ -1773,7 +1773,7 @@ public final class AtlasRuntimeState {
 					);
 				}
 			}
-			if (reducePbr) {
+			if (reducePbr && !preserveOriginalMips) {
 				pbrFuture = CompletableFuture.supplyAsync(() -> {
 					try {
 						return IrisPbrAtlasReducer.buildRepacked(
@@ -2386,18 +2386,16 @@ public final class AtlasRuntimeState {
 			animatedSprites = image.transferAnimatedSprites();
 			animatedStateMismatchLogged = false;
 			if (releaseHighResolutionAtlas) {
-				Object pbrHolder = image.pbrImages() != null
+				Object pbrHolder = image.pbrImages() != null || image.isOriginalLayout()
 					? IrisPbrAtlasReducer.detachHolder(highResolutionTexture)
 					: null;
 				if (image.pbrImages() != null) {
-					NearAtlas created = image.isOriginalLayout()
-						? null
-						: NearAtlas.create(
-							atlasWidth,
-							atlasHeight,
-							atlasMipLevels,
-							net.minecraft.client.Minecraft.getInstance().getResourceManager()
-						);
+					NearAtlas created = NearAtlas.create(
+						atlasWidth,
+						atlasHeight,
+						atlasMipLevels,
+						net.minecraft.client.Minecraft.getInstance().getResourceManager()
+					);
 					if (created != null && created.isCompact() && NearAtlas.hybridRequested()) {
 						AtlasStream.LOGGER.info(
 							"Repacked low atlas uses compact near-atlas streaming instead of the layout-based hybrid fallback"
@@ -2407,19 +2405,22 @@ public final class AtlasRuntimeState {
 						nearAtlas.close();
 					}
 					nearAtlas = created;
-					nearAtlasUnavailable = created == null && !image.isOriginalLayout();
-					if (image.isOriginalLayout()) {
-						AtlasStream.LOGGER.info(
-							"Low atlas preserves the original {}x{} layout; Iris terrain uses it for all distances",
-							atlasWidth,
-							atlasHeight
-						);
-					}
+					nearAtlasUnavailable = created == null;
 				} else {
 					nearAtlasUnavailable = false;
 				}
+				if (image.isOriginalLayout()) {
+					AtlasStream.LOGGER.info(
+						"Low atlas preserves the original {}x{} layout and vanilla PBR maps; "
+							+ "Iris terrain uses both for all distances",
+						atlasWidth,
+						atlasHeight
+					);
+				}
 				replaceBlockAtlasWithLowResolution(atlas, highResolutionTexture, texture, textureView);
-				if (image.pbrImages() != null) {
+				if (image.isOriginalLayout()) {
+					IrisPbrAtlasReducer.rebindHolder(pbrHolder, texture);
+				} else if (image.pbrImages() != null) {
 					reducedPbrAtlases = IrisPbrAtlasReducer.apply(pbrHolder, texture, image.pbrImages());
 				}
 			}
