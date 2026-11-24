@@ -262,6 +262,7 @@ public final class AtlasRuntimeState {
 		}
 		long buildGeneration;
 		List<SpriteRegion> regions;
+		Map<Identifier, NativeImage[]> spriteMipImages;
 		int atlasWidth;
 		int atlasHeight;
 		int mipLevelCount;
@@ -280,6 +281,7 @@ public final class AtlasRuntimeState {
 			atlasHeight = geometry.atlasStream$getHeight();
 			mipLevelCount = geometry.atlasStream$getMipLevelCount();
 			regions = snapshotRegions(atlas, atlasWidth, atlasHeight);
+			spriteMipImages = snapshotSpriteMipImages(atlas);
 			targetResolution = AtlasStreamClient.getConfig().targetResolution();
 			// The PBR images only need the resource pack, so they can be built before Iris has its pipeline.
 			reducePbr = enableDistancePreview && (SodiumTerrainIntegration.isIrisShaderPackInUse()
@@ -294,6 +296,7 @@ public final class AtlasRuntimeState {
 			try {
 				return createLowAtlas(
 					resourceManager,
+					spriteMipImages,
 					regions,
 					atlasWidth,
 					atlasHeight,
@@ -1695,8 +1698,20 @@ public final class AtlasRuntimeState {
 		return List.copyOf(regions);
 	}
 
+	private static Map<Identifier, NativeImage[]> snapshotSpriteMipImages(TextureAtlas atlas) {
+		Map<Identifier, NativeImage[]> result = new HashMap<>();
+		for (TextureAtlasSprite sprite : ((TextureAtlasAccessor) atlas).atlasStream$getSprites()) {
+			result.put(
+				sprite.contents().name(),
+				((SpriteContentsAccessor) sprite.contents()).atlasStream$getMipImages()
+			);
+		}
+		return Map.copyOf(result);
+	}
+
 	private static LowAtlasImage createLowAtlas(
 		ResourceManager resourceManager,
+		Map<Identifier, NativeImage[]> spriteMipImages,
 		List<SpriteRegion> regions,
 		int sourceAtlasWidth,
 		int sourceAtlasHeight,
@@ -1712,12 +1727,23 @@ public final class AtlasRuntimeState {
 				region.identifier(), region.x(), region.y(), region.width(), region.height(),
 				region.paddingX(), region.paddingY()))
 			.toList();
-		com.malaron.atlasstream.atlas.LowAtlasPacker.Layout layout =
-			com.malaron.atlasstream.atlas.LowAtlasPacker.pack(packedSprites, targetResolution, 16384);
+		com.malaron.atlasstream.atlas.LowAtlasPacker.Layout originalLayout =
+			com.malaron.atlasstream.atlas.LowAtlasPacker.preserveLayout(
+				packedSprites, targetResolution, sourceAtlasWidth, sourceAtlasHeight
+			);
 		int lowMipLevelCount = Math.min(
 			sourceMipLevelCount,
 			Integer.numberOfTrailingZeros(targetResolution) + 1
 		);
+		boolean preserveOriginalMips = originalLayout != null && regions.stream().allMatch(region -> {
+			NativeImage[] images = spriteMipImages.get(region.identifier());
+			return images != null && images.length >= lowMipLevelCount;
+		});
+		com.malaron.atlasstream.atlas.LowAtlasPacker.Layout layout = preserveOriginalMips
+			? originalLayout
+			: com.malaron.atlasstream.atlas.LowAtlasPacker.pack(
+				packedSprites, targetResolution, 16384
+			);
 		long imageBytes = 0;
 		for (int level = 0; level < lowMipLevelCount; level++) {
 			imageBytes += (long) Math.max(1, layout.width() >> level) * Math.max(1, layout.height() >> level) * 4;
@@ -1733,6 +1759,20 @@ public final class AtlasRuntimeState {
 		NativeImage atlas = new NativeImage(layout.width(), layout.height(), true);
 		mipLevels.add(atlas);
 		try {
+			if (preserveOriginalMips) {
+				for (int level = 1; level < lowMipLevelCount; level++) {
+					mipLevels.add(new NativeImage(
+						Math.max(1, layout.width() >> level),
+						Math.max(1, layout.height() >> level),
+						true
+					));
+				}
+				for (SpriteRegion region : regions) {
+					writeOriginalSpriteMips(
+						mipLevels, spriteMipImages.get(region.identifier()), region
+					);
+				}
+			}
 			if (reducePbr) {
 				pbrFuture = CompletableFuture.supplyAsync(() -> {
 					try {
@@ -1767,7 +1807,9 @@ public final class AtlasRuntimeState {
 						throw new IOException("Texture dimensions do not match stitched sprite bounds");
 					}
 					try {
-						writeRepackedSprite(atlas, source, region, placement);
+						if (!preserveOriginalMips) {
+							writeRepackedSprite(atlas, source, region, placement);
+						}
 						if (region.animated()) {
 							SpriteRegion destination = destinationRegion(region, placement);
 							AnimatedSpriteData animation = createAnimatedSpriteData(
@@ -1792,8 +1834,10 @@ public final class AtlasRuntimeState {
 			List<SpriteRegion> lowRegions = layout.placements().values().stream()
 				.map(placement -> destinationRegion(regionsById.get(placement.sprite().identifier()), placement))
 				.toList();
-			for (int level = 1; level < lowMipLevelCount; level++) {
-				mipLevels.add(createMipLevel(mipLevels.get(level - 1), lowRegions, level));
+			if (!preserveOriginalMips) {
+				for (int level = 1; level < lowMipLevelCount; level++) {
+					mipLevels.add(createMipLevel(mipLevels.get(level - 1), lowRegions, level));
+				}
 			}
 			if (AtlasStreamClient.getConfig().debugTintLowResolution()) {
 				mipLevels.forEach(AtlasRuntimeState::tintMagenta);
@@ -1808,8 +1852,10 @@ public final class AtlasRuntimeState {
 			}
 			NativeImage remap = createLowAtlasRemap(layout, sourceAtlasWidth, sourceAtlasHeight, sourceMipLevelCount);
 			AtlasStream.LOGGER.info(
-				"Repacked low atlas at target {}px: {} sprites into {}x{} with {} mips ({} skipped); no pixels were upscaled",
-				targetResolution, loadedSprites.get(), layout.width(), layout.height(), lowMipLevelCount, skippedSprites.get()
+				"{} low atlas at target {}px: {} sprites into {}x{} with {} mips ({} skipped); no pixels were upscaled",
+				preserveOriginalMips ? "Preserved original-layout" : "Repacked",
+				targetResolution, loadedSprites.get(), layout.width(), layout.height(), lowMipLevelCount,
+				skippedSprites.get()
 			);
 			return new LowAtlasImage(mipLevels, layout, remap, animatedSpriteData, pbrImages);
 		} catch (RuntimeException | Error exception) {
@@ -2073,6 +2119,44 @@ public final class AtlasRuntimeState {
 					placement.y() + destinationY,
 					averageImagePixels(source, sourceX, sourceY, region.width(), region.height(), factor)
 				);
+			}
+		}
+	}
+
+	private static void writeOriginalSpriteMips(
+		List<NativeImage> destinationMips,
+		NativeImage[] sourceMips,
+		SpriteRegion region
+	) {
+		int columns = Math.max(1, sourceMips[0].getWidth() / Math.max(1, region.width()));
+		int rows = Math.max(1, sourceMips[0].getHeight() / Math.max(1, region.height()));
+		for (int level = 0; level < destinationMips.size(); level++) {
+			NativeImage source = sourceMips[level];
+			int sourceWidth = Math.max(1, source.getWidth() / columns);
+			int sourceHeight = Math.max(1, source.getHeight() / rows);
+			int paddedWidth = Math.max(
+				sourceWidth,
+				Math.max(1, (region.width() + region.paddingX() * 2) >> level)
+			);
+			int paddedHeight = Math.max(
+				sourceHeight,
+				Math.max(1, (region.height() + region.paddingY() * 2) >> level)
+			);
+			int sourceOffsetX = (paddedWidth - sourceWidth) / 2;
+			int sourceOffsetY = (paddedHeight - sourceHeight) / 2;
+			int destinationX = (region.x() - region.paddingX()) >> level;
+			int destinationY = (region.y() - region.paddingY()) >> level;
+			NativeImage destination = destinationMips.get(level);
+			for (int y = 0; y < paddedHeight && destinationY + y < destination.getHeight(); y++) {
+				int sourceY = Math.clamp(y - sourceOffsetY, 0, sourceHeight - 1);
+				for (int x = 0; x < paddedWidth && destinationX + x < destination.getWidth(); x++) {
+					int sourceX = Math.clamp(x - sourceOffsetX, 0, sourceWidth - 1);
+					destination.setPixel(
+						destinationX + x,
+						destinationY + y,
+						source.getPixel(sourceX, sourceY)
+					);
+				}
 			}
 		}
 	}

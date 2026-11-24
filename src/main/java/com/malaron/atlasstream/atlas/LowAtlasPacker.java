@@ -64,6 +64,38 @@ public final class LowAtlasPacker {
 		throw new IllegalArgumentException("Repacked low atlas exceeds the supported maximum dimension");
 	}
 
+	public static Layout preserveLayout(
+		List<Sprite> sprites,
+		int targetResolution,
+		int sourceWidth,
+		int sourceHeight
+	) {
+		Map<Identifier, Placement> placements = new LinkedHashMap<>();
+		for (Sprite sprite : sprites) {
+			if (reductionFactor(sprite.width(), sprite.height(), targetResolution) != 1
+					|| sprite.sourceX() < sprite.paddingX()
+					|| sprite.sourceY() < sprite.paddingY()
+					|| sprite.sourceX() + sprite.width() + sprite.paddingX() > sourceWidth
+					|| sprite.sourceY() + sprite.height() + sprite.paddingY() > sourceHeight) {
+				return null;
+			}
+			placements.put(
+				sprite.identifier(),
+				new Placement(
+					sprite,
+					1,
+					sprite.sourceX() - sprite.paddingX(),
+					sprite.sourceY() - sprite.paddingY(),
+					sprite.width(),
+					sprite.height(),
+					sprite.paddingX(),
+					sprite.paddingY()
+				)
+			);
+		}
+		return new Layout(sourceWidth, sourceHeight, Map.copyOf(placements));
+	}
+
 	public static int reductionFactor(int width, int height, int targetResolution) {
 		int factor = 1;
 		while (Math.max(Math.ceilDiv(width, factor), Math.ceilDiv(height, factor)) > targetResolution) {

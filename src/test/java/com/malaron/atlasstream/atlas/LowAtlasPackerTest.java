@@ -1,6 +1,7 @@
 package com.malaron.atlasstream.atlas;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -47,6 +48,37 @@ class LowAtlasPackerTest {
 				assertTrue(!overlaps);
 			}
 		}
+	}
+
+	@Test
+	void preservesOriginalLayoutWhenEverySpriteFitsTheTarget() {
+		LowAtlasPacker.Sprite first = new LowAtlasPacker.Sprite(
+			id("minecraft:first"), 19, 37, 16, 16, 1, 1
+		);
+		LowAtlasPacker.Sprite second = new LowAtlasPacker.Sprite(
+			id("minecraft:second"), 53, 91, 8, 8, 2, 2
+		);
+
+		LowAtlasPacker.Layout layout = LowAtlasPacker.preserveLayout(
+			List.of(first, second), 16, 256, 256
+		);
+
+		assertEquals(256, layout.width());
+		assertEquals(256, layout.height());
+		assertEquals(18, layout.placements().get(id("minecraft:first")).x());
+		assertEquals(36, layout.placements().get(id("minecraft:first")).y());
+		assertEquals(1, layout.placements().get(id("minecraft:first")).factor());
+		assertEquals(51, layout.placements().get(id("minecraft:second")).x());
+		assertEquals(89, layout.placements().get(id("minecraft:second")).y());
+	}
+
+	@Test
+	void doesNotPreserveOriginalLayoutWhenASpriteNeedsReduction() {
+		LowAtlasPacker.Layout layout = LowAtlasPacker.preserveLayout(
+			List.of(sprite("minecraft:large", 32)), 16, 64, 64
+		);
+
+		assertNull(layout);
 	}
 
 	private static LowAtlasPacker.Sprite sprite(String identifier, int size) {
