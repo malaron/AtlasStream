@@ -2515,11 +2515,19 @@ public final class AtlasRuntimeState {
 						atlasHeight
 					);
 				}
-				replaceBlockAtlasWithLowResolution(atlas, highResolutionTexture, texture, textureView);
 				if (image.isOriginalLayout()) {
-					IrisPbrAtlasReducer.rebindHolder(pbrHolder, texture);
+					// Item geometry and GUI previews retain direct references to the original atlas view. Keep it
+					// resident for this no-relocation layout; Sodium terrain still selects the reduced texture
+					// explicitly for terrain draws.
+					IrisPbrAtlasReducer.rebindHolder(pbrHolder, highResolutionTexture, texture);
+					AtlasStream.LOGGER.info(
+						"Retaining the original block atlas for inventory and held-item rendering"
+					);
 				} else if (image.pbrImages() != null) {
+					replaceBlockAtlasWithLowResolution(atlas, highResolutionTexture, texture, textureView);
 					reducedPbrAtlases = IrisPbrAtlasReducer.apply(pbrHolder, texture, image.pbrImages());
+				} else {
+					replaceBlockAtlasWithLowResolution(atlas, highResolutionTexture, texture, textureView);
 				}
 			}
 			initialized = true;
