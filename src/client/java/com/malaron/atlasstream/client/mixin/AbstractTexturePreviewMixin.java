@@ -25,6 +25,11 @@ public abstract class AbstractTexturePreviewMixin {
 		if ((Object) this instanceof TextureAtlas atlas
 				&& AtlasRuntimeState.usesLowResolutionAtlas(atlas)) {
 			callback.setReturnValue(AtlasRuntimeState.lowResolutionTexture(atlas));
+		} else if ((Object) this instanceof TextureAtlas atlas) {
+			GpuTexture fallback = AtlasRuntimeState.reloadFallbackTexture(atlas);
+			if (fallback != null) {
+				callback.setReturnValue(fallback);
+			}
 		}
 	}
 
@@ -38,6 +43,11 @@ public abstract class AbstractTexturePreviewMixin {
 		if ((Object) this instanceof TextureAtlas atlas
 				&& AtlasRuntimeState.usesLowResolutionAtlas(atlas)) {
 			callback.setReturnValue(AtlasRuntimeState.lowResolutionTextureView(atlas));
+		} else if ((Object) this instanceof TextureAtlas atlas) {
+			GpuTextureView fallback = AtlasRuntimeState.reloadFallbackView(atlas);
+			if (fallback != null) {
+				callback.setReturnValue(fallback);
+			}
 		}
 	}
 }
