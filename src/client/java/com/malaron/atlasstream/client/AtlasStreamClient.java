@@ -44,10 +44,11 @@ public class AtlasStreamClient implements ClientModInitializer {
 			FabricLoader.getInstance().getConfigDir().resolve("atlasstream.properties")
 		);
 		AtlasStream.LOGGER.info(
-			"Loaded texture LOD settings: high-resolution distance {} blocks, hysteresis {} blocks, high-resolution cache target {} MiB",
+			"Loaded texture LOD settings: high-resolution distance {} blocks, hysteresis {} blocks, high-resolution cache target {} MiB, disk cache target {} MiB",
 			config.highResolutionDistance(),
 			config.hysteresis(),
-			config.highResolutionCacheMiB()
+			config.highResolutionCacheMiB(),
+			config.diskCacheMiB()
 		);
 		if (config.enableOnLaunch()) {
 			AtlasRuntimeState.armLaunchRebuild();
