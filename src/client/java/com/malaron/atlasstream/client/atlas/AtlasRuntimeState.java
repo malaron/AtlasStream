@@ -117,12 +117,24 @@ public final class AtlasRuntimeState {
 
 	public static GpuTextureView reloadFallbackView(TextureAtlas atlas) {
 		GpuTextureView fallback = reloadFallbackView;
-		return fallback != null && TextureAtlas.LOCATION_BLOCKS.equals(atlas.location()) ? fallback : null;
+		LowAtlasRemap mapping = reloadFallbackMapping;
+		TextureAtlasAccessor geometry = (TextureAtlasAccessor) atlas;
+		return fallback != null && mapping != null
+				&& TextureAtlas.LOCATION_BLOCKS.equals(atlas.location())
+				&& mapping.matches(geometry.atlasStream$getWidth(), geometry.atlasStream$getHeight())
+			? fallback
+			: null;
 	}
 
 	public static GpuTexture reloadFallbackTexture(TextureAtlas atlas) {
 		GpuTexture fallback = reloadFallbackTexture;
-		return fallback != null && TextureAtlas.LOCATION_BLOCKS.equals(atlas.location()) ? fallback : null;
+		LowAtlasRemap mapping = reloadFallbackMapping;
+		TextureAtlasAccessor geometry = (TextureAtlasAccessor) atlas;
+		return fallback != null && mapping != null
+				&& TextureAtlas.LOCATION_BLOCKS.equals(atlas.location())
+				&& mapping.matches(geometry.atlasStream$getWidth(), geometry.atlasStream$getHeight())
+			? fallback
+			: null;
 	}
 
 	public static void setBuildPhase(String message) {
@@ -228,6 +240,10 @@ public final class AtlasRuntimeState {
 			this.destinationWidth = destinationWidth;
 			this.destinationHeight = destinationHeight;
 			this.placements = List.copyOf(layout.placements().values());
+		}
+
+		private boolean matches(int width, int height) {
+			return Math.round(sourceWidth) == width && Math.round(sourceHeight) == height;
 		}
 
 		private float[] map(float u, float v) {
