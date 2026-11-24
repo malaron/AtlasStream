@@ -604,7 +604,7 @@ public final class NearAtlas implements AutoCloseable {
 			request(sprite);
 			return;
 		}
-		if (sectionSprites.computeIfAbsent(sectionKey, ignored -> ConcurrentHashMap.newKeySet()).add(sprite) && compact) {
+		if (sectionSprites.computeIfAbsent(sectionKey, ignored -> ConcurrentHashMap.newKeySet()).add(sprite)) {
 			RESIDENCY_REVISION.incrementAndGet();
 		}
 		double reach = nearReach;
@@ -629,9 +629,7 @@ public final class NearAtlas implements AutoCloseable {
 	// Called when a section is about to be re-meshed; its sprite list is rebuilt by the mesh task.
 	void clearSection(long sectionKey) {
 		sectionSprites.put(sectionKey, ConcurrentHashMap.newKeySet());
-		if (compact) {
-			RESIDENCY_REVISION.incrementAndGet();
-		}
+		RESIDENCY_REVISION.incrementAndGet();
 	}
 
 	// For sprites drawn without a section (held items, entities, particles): resident while they keep being drawn.
@@ -949,6 +947,8 @@ public final class NearAtlas implements AutoCloseable {
 			writeRemap(evicted, false);
 			freeSlot(evicted);
 			freedSlots++;
+		}
+		if (evicted != null) {
 			RESIDENCY_REVISION.incrementAndGet();
 		}
 		lastFrame.remove(sprite);
@@ -1439,9 +1439,7 @@ public final class NearAtlas implements AutoCloseable {
 			lastNeeded.put(job.sprite, System.nanoTime());
 			residentSprites++;
 			resident.put(job.sprite, job.geometry);
-			if (compact) {
-				RESIDENCY_REVISION.incrementAndGet();
-			}
+			RESIDENCY_REVISION.incrementAndGet();
 		} catch (java.util.concurrent.ExecutionException | InterruptedException | RuntimeException exception) {
 			freeSlot(job.geometry);
 			failedSprites++;

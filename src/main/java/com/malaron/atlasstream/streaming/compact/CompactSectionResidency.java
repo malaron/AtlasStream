@@ -9,14 +9,16 @@ public final class CompactSectionResidency {
 	public static <T> boolean resolved(
 		boolean compact, boolean hybrid, Iterable<T> sprites, Predicate<T> isResident
 	) {
-		if (!compact || hybrid || sprites == null) {
-			return true;
+		if (hybrid || sprites == null) {
+			return hybrid;
 		}
+		boolean hasSprite = false;
 		for (T sprite : sprites) {
+			hasSprite = true;
 			if (!isResident.test(sprite)) {
 				return false;
 			}
 		}
-		return true;
+		return hasSprite;
 	}
 }
