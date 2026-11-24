@@ -131,8 +131,18 @@ public final class SodiumTerrainIntegration {
 		};
 		Method renderMethod = RENDER_METHODS.get(renderer.getClass());
 		boolean distancePreview = AtlasRuntimeState.isDistancePreviewEnabled();
-		boolean irisShaderpack = distancePreview && isIrisShaderPackInUse() && !AtlasRuntimeState.isNearAtlasActive();
 		boolean translucent = isTranslucent(terrainRenderPass);
+		if (distancePreview && AtlasRuntimeState.isLowAtlasOriginalLayout()) {
+			arguments[1] = renderLists;
+			TRANSLUCENT_PASS.set(translucent);
+			try {
+				invoke(renderMethod, renderer, arguments);
+			} finally {
+				TRANSLUCENT_PASS.remove();
+			}
+			return;
+		}
+		boolean irisShaderpack = distancePreview && isIrisShaderPackInUse() && !AtlasRuntimeState.isNearAtlasActive();
 		if (irisShaderpack) {
 			ACTIVE_LOD.set(SectionLod.LOW_RESOLUTION);
 			try {
