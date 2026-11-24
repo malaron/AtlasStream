@@ -1750,6 +1750,28 @@ public final class AtlasRuntimeState {
 			NativeImage[] images = spriteMipImages.get(region.identifier());
 			return images != null && images.length >= lowMipLevelCount;
 		});
+		if (!preserveOriginalMips) {
+			List<String> reductions = regions.stream()
+				.filter(region -> Math.max(region.width(), region.height()) > targetResolution)
+				.map(region -> region.identifier() + "=" + region.width() + "x" + region.height())
+				.sorted()
+				.toList();
+			List<String> missingMips = regions.stream()
+				.filter(region -> {
+					NativeImage[] images = spriteMipImages.get(region.identifier());
+					return images == null || images.length < lowMipLevelCount;
+				})
+				.map(region -> region.identifier().toString())
+				.sorted()
+				.toList();
+			AtlasStream.LOGGER.info(
+				"Original-layout low atlas disabled: oversizedSprites={} [{}], missingMipChains={} [{}]",
+				reductions.size(),
+				reductions.stream().limit(24).collect(java.util.stream.Collectors.joining(", ")),
+				missingMips.size(),
+				missingMips.stream().limit(24).collect(java.util.stream.Collectors.joining(", "))
+			);
+		}
 		com.malaron.atlasstream.atlas.LowAtlasPacker.Layout layout = preserveOriginalMips
 			? originalLayout
 			: com.malaron.atlasstream.atlas.LowAtlasPacker.pack(
