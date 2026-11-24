@@ -10,7 +10,6 @@ import com.malaron.atlasstream.client.atlas.AtlasRuntimeState;
 import com.malaron.atlasstream.client.diagnostics.ItemStreamDiagnostics;
 import com.malaron.atlasstream.client.sodium.SodiumTerrainIntegration;
 import com.malaron.atlasstream.client.streaming.VirtualItemPipeline;
-import com.malaron.atlasstream.client.diagnostics.EntityTextureDiagnostics;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.commands.RenderPass;
@@ -93,9 +92,6 @@ public abstract class PreparedItemVirtualTextureMixin {
 			? near != null ? near : AtlasRuntimeState.lowAtlasTextureForView(view)
 			: view;
 		pass.setUniform(name, bound, sampler);
-		if (name.equals("Sampler0")) {
-			EntityTextureDiagnostics.sample(this.name(), bound);
-		}
 		if (atlasStream$virtualItem && name.equals("Sampler0")) {
 			var views = AtlasRuntimeState.virtualTextureSamplingViews(atlasStream$streamTiles);
 			pass.setUniform("u_VirtualTileAtlas", views.tileAtlas(), sampler);
