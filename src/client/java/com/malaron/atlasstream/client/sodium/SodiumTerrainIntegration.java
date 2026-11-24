@@ -51,6 +51,8 @@ public final class SodiumTerrainIntegration {
 	private static final AtomicBoolean IRIS_SAMPLER_REFRESH_FAILURE_LOGGED = new AtomicBoolean();
 	private static final AtomicBoolean IRIS_SAMPLER_REFRESH_LOGGED = new AtomicBoolean();
 	private static final AtomicBoolean IRIS_PBR_LOOKUP_FAILURE_LOGGED = new AtomicBoolean();
+	private static final Set<Integer> IRIS_NON_BLOCK_PBR_TEXTURES_LOGGED =
+		Collections.newSetFromMap(new ConcurrentHashMap<>());
 	private static final AtomicBoolean LOW_ATLAS_BINDING_LOGGED = new AtomicBoolean();
 	private static final AtomicBoolean SECTION_SPLIT_LOGGED = new AtomicBoolean();
 	private static volatile Method irisPackInUseMethod;
@@ -343,7 +345,20 @@ public final class SodiumTerrainIntegration {
 			if (source == null) {
 				source = bound;
 			}
-			return (Integer) source.getClass().getMethod("iris$getGlId").invoke(source);
+			int boundId = (Integer) bound.getClass().getMethod("iris$getGlId").invoke(bound);
+			int resolvedId = (Integer) source.getClass().getMethod("iris$getGlId").invoke(source);
+			if (source == bound
+					&& IRIS_NON_BLOCK_PBR_TEXTURES_LOGGED.size() < 16
+					&& IRIS_NON_BLOCK_PBR_TEXTURES_LOGGED.add(boundId)) {
+				AtlasStream.LOGGER.info(
+					"Iris PBR lookup texture={}: {}x{}, resolvedHolder={}",
+					boundId,
+					bound.getWidth(0),
+					bound.getHeight(0),
+					resolvedId
+				);
+			}
+			return resolvedId;
 		} catch (ReflectiveOperationException | RuntimeException exception) {
 			if (IRIS_PBR_LOOKUP_FAILURE_LOGGED.compareAndSet(false, true)) {
 				AtlasStream.LOGGER.error("Could not resolve the original atlas for Iris PBR lookup", exception);
