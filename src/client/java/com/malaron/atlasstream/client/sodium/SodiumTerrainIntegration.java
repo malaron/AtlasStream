@@ -25,7 +25,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import com.malaron.atlasstream.AtlasStream;
 import com.malaron.atlasstream.client.AtlasStreamClient;
 import com.malaron.atlasstream.client.atlas.AtlasRuntimeState;
-import com.malaron.atlasstream.client.atlas.IrisPbrAtlasReducer;
 import com.malaron.atlasstream.client.atlas.NearAtlas;
 import com.malaron.atlasstream.client.diagnostics.LodPerformanceStats;
 import com.malaron.atlasstream.client.diagnostics.TerrainAlphaDiagnostics;
@@ -362,12 +361,11 @@ public final class SodiumTerrainIntegration {
 					&& IRIS_NON_BLOCK_PBR_TEXTURES_LOGGED.size() < 16
 					&& IRIS_NON_BLOCK_PBR_TEXTURES_LOGGED.add(boundId)) {
 				AtlasStream.LOGGER.info(
-					"Iris PBR lookup texture={}: {}x{}, resolvedHolder={}, {}",
+					"Iris PBR lookup texture={}: {}x{}, resolvedHolder={}",
 					boundId,
 					bound.getWidth(0),
 					bound.getHeight(0),
-					resolvedId,
-					IrisPbrAtlasReducer.holderSummary(boundId)
+					resolvedId
 				);
 			}
 			return resolvedId;

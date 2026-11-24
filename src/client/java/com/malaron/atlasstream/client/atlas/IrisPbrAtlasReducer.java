@@ -283,41 +283,6 @@ public final class IrisPbrAtlasReducer {
 		}
 	}
 
-	public static String holderSummary(int albedoGlId) {
-		try {
-			Object holder = irisHolders(irisManager()).get(albedoGlId);
-			if (holder == null) {
-				return "missing";
-			}
-			Class<?> holderInterface = Class.forName(
-				"net.irisshaders.iris.pbr.texture.PBRTextureHolder",
-				false,
-				IrisPbrAtlasReducer.class.getClassLoader()
-			);
-			Object normal = holderInterface.getMethod("normalTexture").invoke(holder);
-			Object specular = holderInterface.getMethod("specularTexture").invoke(holder);
-			return "present normal=" + textureSummary(normal) + " specular=" + textureSummary(specular);
-		} catch (ReflectiveOperationException | RuntimeException exception) {
-			return "error:" + exception.getClass().getSimpleName();
-		}
-	}
-
-	private static String textureSummary(Object value) {
-		if (!(value instanceof AbstractTexture texture)) {
-			return "missing";
-		}
-		GpuTexture gpuTexture = ((AbstractTextureAccessor) texture).atlasStream$getTexture();
-		if (gpuTexture == null) {
-			return "unbound";
-		}
-		try {
-			int glId = (Integer) gpuTexture.getClass().getMethod("iris$getGlId").invoke(gpuTexture);
-			return glId + "@" + gpuTexture.getWidth(0) + "x" + gpuTexture.getHeight(0);
-		} catch (ReflectiveOperationException | RuntimeException exception) {
-			return "error";
-		}
-	}
-
 	// Returns the PBR atlas objects that now own reduced textures, so Iris's full-size animation uploads can be skipped.
 	static List<Object> apply(Object holder, GpuTexture reducedAlbedo, Images images) {
 		List<Object> reduced = new ArrayList<>();
