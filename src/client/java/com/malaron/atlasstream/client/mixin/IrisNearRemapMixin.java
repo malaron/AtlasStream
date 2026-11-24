@@ -178,6 +178,9 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 				+ REMAP_FUNCTION + LOW_REMAP_FUNCTION + ATLAS_ONLY_FUNCTION;
 			// Include declarations before iris_UV0 when identifying the midpoint attribute.
 			String patchedSource = VanillaNearShaderPatcher.patchReferences(source);
+			if (patchedSource.equals(source)) {
+				continue;
+			}
 			declaration = UV0_DECLARATION.matcher(patchedSource);
 			declaration.find();
 			String head = patchedSource.substring(0, declaration.end());
