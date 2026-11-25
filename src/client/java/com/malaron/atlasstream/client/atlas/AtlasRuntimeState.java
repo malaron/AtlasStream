@@ -1600,6 +1600,12 @@ public final class AtlasRuntimeState {
 	}
 
 	private static synchronized void retainLowAtlasFallback() {
+		// Original-layout and sparse-near paths do not own a copyable low-resolution texture. The live source atlas
+		// remains valid until vanilla swaps it during reload, so there is no fallback copy to retain.
+		if (!atlasOwnsLowResolutionTexture) {
+			closeReloadFallback();
+			return;
+		}
 		GpuTexture source = lowResolutionTexture;
 		GpuTexture remapSource = lowAtlasRemapTexture;
 		closeReloadFallback();
