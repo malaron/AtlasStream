@@ -94,15 +94,15 @@ class LowAtlasPackerTest {
 	}
 
 	@Test
-	void entityCompatibilitySpritesKeepNativeResolution() {
+	void entityCompatibilitySpritesUseSharperCategoryTarget() {
 		LowAtlasPacker.Layout layout = LowAtlasPacker.pack(List.of(
 			sprite("minecraft:entity/chest/normal", 1024),
 			sprite("minecraft:entity/conduit/cage", 512),
 			sprite("minecraft:block/stone", 256)
 		), 32, 2048);
 
-		assertEquals(1, layout.placements().get(id("minecraft:entity/chest/normal")).factor());
-		assertEquals(16, layout.placements().get(id("minecraft:entity/conduit/cage")).factor());
+		assertEquals(4, layout.placements().get(id("minecraft:entity/chest/normal")).factor());
+		assertEquals(2, layout.placements().get(id("minecraft:entity/conduit/cage")).factor());
 		assertEquals(8, layout.placements().get(id("minecraft:block/stone")).factor());
 	}
 

@@ -10,6 +10,7 @@ import java.util.Objects;
 import net.minecraft.resources.Identifier;
 
 public final class LowAtlasPacker {
+	private static final int ENTITY_COMPATIBILITY_TARGET_RESOLUTION = 256;
 	private LowAtlasPacker() {
 	}
 
@@ -116,11 +117,10 @@ public final class LowAtlasPacker {
 	}
 
 	private static int reductionFactorForSprite(Sprite sprite, int targetResolution) {
-		String path = sprite.identifier().getPath();
-		if (path.startsWith("entity/chest/") || path.startsWith("entity/shulker/")) {
-			return 1;
-		}
-		return reductionFactor(sprite.width(), sprite.height(), targetResolution);
+		int effectiveTarget = sprite.identifier().getPath().startsWith("entity/")
+			? Math.max(targetResolution, ENTITY_COMPATIBILITY_TARGET_RESOLUTION)
+			: targetResolution;
+		return reductionFactor(sprite.width(), sprite.height(), effectiveTarget);
 	}
 
 	private static List<Placement> placeInShelves(List<Placement> placements, int atlasWidth) {
