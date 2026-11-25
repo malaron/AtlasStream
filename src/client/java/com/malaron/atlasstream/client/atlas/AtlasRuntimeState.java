@@ -598,14 +598,6 @@ public final class AtlasRuntimeState {
 		return !lowAtlasOriginalLayout && view != null && view == lowResolutionTextureView;
 	}
 
-	public static GpuTextureView lowAtlasViewForFullSparseEntity(GpuTextureView view) {
-		NearAtlas near = nearAtlas;
-		if (near != null && near.isUsable() && !near.isCompact() && view == near.albedoView()) {
-			return lowResolutionTextureView;
-		}
-		return view;
-	}
-
 	public static net.minecraft.client.renderer.texture.UvMapping remapEntityBlockUv(
 		net.minecraft.client.renderer.texture.UvMapping mapping
 	) {
