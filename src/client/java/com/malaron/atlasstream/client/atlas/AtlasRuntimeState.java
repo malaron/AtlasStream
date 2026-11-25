@@ -100,6 +100,7 @@ public final class AtlasRuntimeState {
 	private static volatile boolean lowAtlasOriginalLayout;
 	private static volatile boolean screenEffectUsesNearAtlas;
 	private static final AtomicBoolean SCREEN_OVERLAY_REMAP_LOGGED = new AtomicBoolean();
+	private static final Set<String> ENTITY_ATLAS_BINDINGS_LOGGED = new HashSet<>();
 	private static volatile VirtualTextureGpuPageTable virtualTextureGpuPageTable;
 	private static volatile VirtualTextureTileBuilder virtualTextureTileBuilder;
 	private static volatile VirtualTextureGpuCache virtualTextureGpuCache;
@@ -598,6 +599,56 @@ public final class AtlasRuntimeState {
 		return !lowAtlasOriginalLayout && view != null && view == lowResolutionTextureView;
 	}
 
+	public static void logEntityAtlasBinding(String renderType, GpuTextureView view) {
+		if (view == null) {
+			return;
+		}
+		String key = renderType + ":" + System.identityHashCode(view);
+		if (ENTITY_ATLAS_BINDINGS_LOGGED.size() >= 24 || !ENTITY_ATLAS_BINDINGS_LOGGED.add(key)) {
+			return;
+		}
+		AtlasStream.LOGGER.info(
+			"Entity atlas binding: renderType={}, view={}, texture={}",
+			renderType,
+			System.identityHashCode(view),
+			textureViewSummary(view)
+		);
+	}
+
+	private static String textureViewSummary(GpuTextureView view) {
+		try {
+			GpuTexture texture = null;
+			for (java.lang.reflect.Method method : view.getClass().getMethods()) {
+				if (method.getParameterCount() == 0
+						&& method.getReturnType().getSimpleName().equals("GpuTexture")) {
+					texture = (GpuTexture) method.invoke(view);
+					break;
+				}
+			}
+			if (texture == null) {
+				Class<?> type = view.getClass();
+				while (texture == null && type != null) {
+					for (java.lang.reflect.Field field : type.getDeclaredFields()) {
+						if (GpuTexture.class.isAssignableFrom(field.getType())) {
+							field.setAccessible(true);
+							texture = (GpuTexture) field.get(view);
+							break;
+						}
+					}
+					type = type.getSuperclass();
+				}
+			}
+			if (texture == null) {
+				return "missing";
+			}
+			int glId = (Integer) texture.getClass().getMethod("iris$getGlId").invoke(texture);
+			return glId + "@" + texture.getWidth(0) + "x" + texture.getHeight(0)
+				+ ":" + texture.getMipLevels();
+		} catch (ReflectiveOperationException | RuntimeException exception) {
+			return "unresolved:" + exception.getClass().getSimpleName();
+		}
+	}
+
 	public static boolean isLowAtlasOriginalLayout() {
 		return lowAtlasOriginalLayout;
 	}
@@ -745,9 +796,6 @@ public final class AtlasRuntimeState {
 	}
 
 	public static synchronized void recordSpriteUsage(net.minecraft.client.renderer.texture.TextureAtlasSprite sprite) {
-		if (!isTerrainNearSprite(sprite.atlasLocation(), sprite.contents().name())) {
-			return;
-		}
 		NearAtlas near = nearAtlas;
 		if (near != null && !guiItemDraw && TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
 			near.touch(sprite);
