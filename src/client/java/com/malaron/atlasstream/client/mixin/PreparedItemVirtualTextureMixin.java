@@ -10,7 +10,6 @@ import com.malaron.atlasstream.client.atlas.AtlasRuntimeState;
 import com.malaron.atlasstream.client.diagnostics.ItemStreamDiagnostics;
 import com.malaron.atlasstream.client.sodium.SodiumTerrainIntegration;
 import com.malaron.atlasstream.client.streaming.VirtualItemPipeline;
-import com.malaron.atlasstream.client.atlas.AtlasRuntimeState;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.commands.RenderPass;
@@ -89,19 +88,10 @@ public abstract class PreparedItemVirtualTextureMixin {
 		GpuTextureView near = blockScreenEffect
 			? AtlasRuntimeState.screenEffectNearAtlasView()
 			: null;
-		boolean blockEntity = this.name().startsWith("entity_")
-			&& name.equals("Sampler0")
-			&& AtlasRuntimeState.isReducedBlockAtlasView(view);
-		GpuTextureView entityNear = blockEntity ? AtlasRuntimeState.nearAtlasView() : null;
-		GpuTextureView bound = entityNear != null
-			? entityNear
-			: blockScreenEffect && name.equals("Sampler0")
-				? near != null ? near : AtlasRuntimeState.lowAtlasTextureForView(view)
-				: view;
+		GpuTextureView bound = blockScreenEffect && name.equals("Sampler0")
+			? near != null ? near : AtlasRuntimeState.lowAtlasTextureForView(view)
+			: view;
 		pass.setUniform(name, bound, sampler);
-		if (name.equals("Sampler0") && this.name().startsWith("entity_")) {
-			AtlasRuntimeState.logEntityAtlasBinding(this.name(), bound);
-		}
 		if (atlasStream$virtualItem && name.equals("Sampler0")) {
 			var views = AtlasRuntimeState.virtualTextureSamplingViews(atlasStream$streamTiles);
 			pass.setUniform("u_VirtualTileAtlas", views.tileAtlas(), sampler);
