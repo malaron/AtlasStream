@@ -174,8 +174,39 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 
 	@Inject(method = "patchVanilla", at = @At("RETURN"), cancellable = true, remap = false, require = 0)
 	private static void atlasStream$remapVanilla(CallbackInfoReturnable<Map<Object, String>> callback) {
-		// Sodium terrain shaders are patched below. Vanilla/entity shaders must remain byte-for-byte native:
-		// their textures and multipart models are not part of the block-atlas layout.
+		Map<Object, String> result = callback.getReturnValue();
+		if (result == null) {
+			return;
+		}
+		Map<Object, String> patched = new LinkedHashMap<>(result);
+		boolean changed = false;
+		for (Map.Entry<Object, String> entry : patched.entrySet()) {
+			if (!"VERTEX".equals(String.valueOf(entry.getKey()))) {
+				continue;
+			}
+			String source = entry.getValue();
+			if (!UV0_DECLARATION.matcher(source).find()) {
+				continue;
+			}
+			String patchedSource = VanillaNearShaderPatcher.patchReferences(source);
+			if (patchedSource.equals(source)) {
+				continue;
+			}
+			String functions =
+				(GTEXTURE_DECLARATION.matcher(patchedSource).find() ? "" : "uniform sampler2D gtexture;\n")
+				+ LOW_REMAP_FUNCTION + REMAP_FUNCTION + ATLAS_ONLY_FUNCTION;
+			java.util.regex.Matcher declaration = UV0_DECLARATION.matcher(patchedSource);
+			declaration.find();
+			entry.setValue(
+				patchedSource.substring(0, declaration.end()) + "\n" + functions
+					+ patchedSource.substring(declaration.end())
+			);
+			changed = true;
+		}
+		if (changed) {
+			com.malaron.atlasstream.client.atlas.AtlasRuntimeState.markVanillaRemapAvailable();
+			callback.setReturnValue(patched);
+		}
 	}
 
 	@Inject(method = "patchSodium", at = @At("RETURN"), cancellable = true, remap = false)
