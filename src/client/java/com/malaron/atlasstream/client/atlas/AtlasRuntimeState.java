@@ -101,6 +101,7 @@ public final class AtlasRuntimeState {
 	private static volatile boolean screenEffectUsesNearAtlas;
 	private static final AtomicBoolean SCREEN_OVERLAY_REMAP_LOGGED = new AtomicBoolean();
 	private static final Set<String> ENTITY_ATLAS_BINDINGS_LOGGED = new HashSet<>();
+	private static final Set<String> ENTITY_QUADS_LOGGED = new HashSet<>();
 	private static volatile VirtualTextureGpuPageTable virtualTextureGpuPageTable;
 	private static volatile VirtualTextureTileBuilder virtualTextureTileBuilder;
 	private static volatile VirtualTextureGpuCache virtualTextureGpuCache;
@@ -746,7 +747,12 @@ public final class AtlasRuntimeState {
 	}
 
 	private static boolean slotUsesNearAtlas(NearAtlas near, Object atlas) {
-		return (!near.isCompact() || vanillaRemapAvailable)
+		// A full-layout sparse atlas has original UVs but only committed pages; switching every
+		// non-terrain draw to it before a sprite is resident produces invisible entity parts.
+		// Compact hybrid mode embeds the low fallback, so it is safe for global slot substitution.
+		return near.isCompact()
+			&& near.isHybrid()
+			&& vanillaRemapAvailable
 			&& !guiItemDraw
 			&& atlas == previewedAtlas
 			&& near.isUsable()
@@ -800,6 +806,7 @@ public final class AtlasRuntimeState {
 		if (near != null && !guiItemDraw && TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
 			near.touch(sprite);
 		}
+
 		if (!TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation()) || !useVirtualTextureForItemDraw()
 				|| SodiumTerrainIntegration.isIrisShaderPackInUse()) {
 			return;
@@ -823,6 +830,27 @@ public final class AtlasRuntimeState {
 		itemSpriteRequests.put(sprite, now);
 		VIRTUAL_TEXTURE_REQUEST_TRACKER.recordSpriteUsage(
 			sprite.getU0(), sprite.getV0(), sprite.getU1(), sprite.getV1(), generation, 0.0
+		);
+	}
+
+	public static void logEntityQuad(net.minecraft.client.renderer.texture.TextureAtlasSprite sprite) {
+		Identifier name = sprite.contents().name();
+		String key = sprite.atlasLocation() + ":" + name;
+		if (ENTITY_QUADS_LOGGED.size() >= 128 || !ENTITY_QUADS_LOGGED.add(key)) {
+			return;
+		}
+		NearAtlas near = nearAtlas;
+		AtlasStream.LOGGER.info(
+			"Entity quad: atlas={}, sprite={}, uv=({},{})-({},{ }), source={}x{}, resident={}",
+			sprite.atlasLocation(),
+			name,
+			sprite.getU0(),
+			sprite.getV0(),
+			sprite.getU1(),
+			sprite.getV1(),
+			sprite.contents().width(),
+			sprite.contents().height(),
+			near != null && near.isResident(sprite)
 		);
 	}
 
