@@ -65,7 +65,7 @@ public final class NearAtlas implements AutoCloseable {
 	private static final int PAGE = 128;
 	private static final AtomicLong RESIDENCY_REVISION = new AtomicLong();
 	// -Datlasstream.compactSize=<texels> shrinks the compact atlas to force overflow when testing.
-	private static final int MAX_COMPACT_SIZE = Integer.getInteger("atlasstream.compactSize", 32768);
+	private static final int MAX_COMPACT_SIZE = Integer.getInteger("atlasstream.compactSize", 16384);
 	private static final boolean HYBRID_REQUESTED = Boolean.parseBoolean(
 		System.getProperty("atlasstream.hybridCompact", "true")
 	);

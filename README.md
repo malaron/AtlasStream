@@ -166,7 +166,7 @@ so other prepared passes remain cached.
 
 When a pack's stitched atlas is too large to keep (for example 256x packs at
 65536x32768), the vanilla block atlas becomes a tiny virtual placeholder and
-the near atlas is created as a *compact* sparse atlas (for example 32768x32768)
+the near atlas is created as a *compact* sparse atlas (for example 16384x16384)
 that is much smaller than the layout. A small remap texture maps each 16x16
 texel layout cell to its slot in the compact atlas, and terrain vertex shaders
 translate UVs through it. With Iris this works by patching the shader text Iris
@@ -192,7 +192,7 @@ adjacent free rectangles can merge again; evictions can use any slot large
 enough. Still-needed evicted sprites rejoin the queue. Sections whose sprites are not all resident
 are drawn from the reduced atlas. A large queue of far sprites is normal when
 the compact atlas is smaller than the view needs. To test this, launch with
-`-Datlasstream.compactSize=8192` (texels, default 32768) and watch the F3
+`-Datlasstream.compactSize=8192` (texels, default 16384) and watch the F3
 "Near sparse atlas" line and the `Slot pressure:` debug log lines.
 Evicted sprites release only pages no remaining sprite references. Adjacent
 pages are decommitted in rectangular batches to reduce driver calls without
