@@ -12,6 +12,7 @@ public record LodConfig(
 	double highResolutionDistance,
 	double hysteresis,
 	long highResolutionCacheMiB,
+	long diskCacheMiB,
 	int targetResolution,
 	boolean debugTintLowResolution,
 	boolean enableOnLaunch
@@ -28,13 +29,17 @@ public record LodConfig(
 	public static final List<Integer> ALLOWED_TARGET_RESOLUTIONS = List.of(16, 32, 64, 128, 256);
 	public static final long MIN_HIGH_RESOLUTION_CACHE_MIB = 64;
 	public static final long MAX_HIGH_RESOLUTION_CACHE_MIB = 16 * 1024;
+	public static final long DEFAULT_DISK_CACHE_MIB = 6 * 1024;
+	public static final long MAX_DISK_CACHE_MIB = 64 * 1024;
 
 	public LodConfig(double highResolutionDistance, double hysteresis, long highResolutionCacheMiB) {
-		this(highResolutionDistance, hysteresis, highResolutionCacheMiB, DEFAULT_TARGET_RESOLUTION);
+		this(highResolutionDistance, hysteresis, highResolutionCacheMiB, DEFAULT_DISK_CACHE_MIB,
+			DEFAULT_TARGET_RESOLUTION, false, true);
 	}
 
 	public LodConfig(double highResolutionDistance, double hysteresis, long highResolutionCacheMiB, int targetResolution) {
-		this(highResolutionDistance, hysteresis, highResolutionCacheMiB, targetResolution, false);
+		this(highResolutionDistance, hysteresis, highResolutionCacheMiB, DEFAULT_DISK_CACHE_MIB,
+			targetResolution, false, true);
 	}
 
 	public LodConfig(
@@ -44,7 +49,8 @@ public record LodConfig(
 		int targetResolution,
 		boolean debugTintLowResolution
 	) {
-		this(highResolutionDistance, hysteresis, highResolutionCacheMiB, targetResolution, debugTintLowResolution, true);
+		this(highResolutionDistance, hysteresis, highResolutionCacheMiB, DEFAULT_DISK_CACHE_MIB,
+			targetResolution, debugTintLowResolution, true);
 	}
 
 	public LodConfig {
@@ -77,6 +83,11 @@ public record LodConfig(
 					+ " and " + MAX_HIGH_RESOLUTION_CACHE_MIB + " MiB"
 			);
 		}
+		if (diskCacheMiB < 0 || diskCacheMiB > MAX_DISK_CACHE_MIB) {
+			throw new IllegalArgumentException(
+				"Disk cache budget must be between 0 and " + MAX_DISK_CACHE_MIB + " MiB"
+			);
+		}
 	}
 
 	public static LodConfig defaults() {
@@ -84,7 +95,10 @@ public record LodConfig(
 			DEFAULT_HIGH_RESOLUTION_DISTANCE,
 			DEFAULT_HYSTERESIS,
 			DEFAULT_HIGH_RESOLUTION_CACHE_MIB,
-			DEFAULT_TARGET_RESOLUTION
+			DEFAULT_DISK_CACHE_MIB,
+			DEFAULT_TARGET_RESOLUTION,
+			false,
+			true
 		);
 	}
 
@@ -98,6 +112,7 @@ public record LodConfig(
 			distance,
 			clampHysteresis(distance, hysteresis),
 			highResolutionCacheMiB,
+			diskCacheMiB,
 			targetResolution,
 			debugTintLowResolution,
 			enableOnLaunch
@@ -109,6 +124,7 @@ public record LodConfig(
 			highResolutionDistance,
 			clampHysteresis(highResolutionDistance, value),
 			highResolutionCacheMiB,
+			diskCacheMiB,
 			targetResolution,
 			debugTintLowResolution,
 			enableOnLaunch
@@ -117,28 +133,35 @@ public record LodConfig(
 
 	public LodConfig withHighResolutionCacheMiB(long value) {
 		return new LodConfig(
-			highResolutionDistance, hysteresis, value, targetResolution,
+			highResolutionDistance, hysteresis, value, diskCacheMiB, targetResolution,
+			debugTintLowResolution, enableOnLaunch
+		);
+	}
+
+	public LodConfig withDiskCacheMiB(long value) {
+		return new LodConfig(
+			highResolutionDistance, hysteresis, highResolutionCacheMiB, value, targetResolution,
 			debugTintLowResolution, enableOnLaunch
 		);
 	}
 
 	public LodConfig withTargetResolution(int value) {
 		return new LodConfig(
-			highResolutionDistance, hysteresis, highResolutionCacheMiB, value,
+			highResolutionDistance, hysteresis, highResolutionCacheMiB, diskCacheMiB, value,
 			debugTintLowResolution, enableOnLaunch
 		);
 	}
 
 	public LodConfig withDebugTintLowResolution(boolean enabled) {
 		return new LodConfig(
-			highResolutionDistance, hysteresis, highResolutionCacheMiB, targetResolution,
+			highResolutionDistance, hysteresis, highResolutionCacheMiB, diskCacheMiB, targetResolution,
 			enabled, enableOnLaunch
 		);
 	}
 
 	public LodConfig withEnableOnLaunch(boolean enabled) {
 		return new LodConfig(
-			highResolutionDistance, hysteresis, highResolutionCacheMiB, targetResolution,
+			highResolutionDistance, hysteresis, highResolutionCacheMiB, diskCacheMiB, targetResolution,
 			debugTintLowResolution, enabled
 		);
 	}
@@ -158,6 +181,7 @@ public record LodConfig(
 			readNumber(properties, "highResolutionDistance", DEFAULT_HIGH_RESOLUTION_DISTANCE),
 			readNumber(properties, "hysteresis", DEFAULT_HYSTERESIS),
 			readLong(properties, "highResolutionCacheMiB", DEFAULT_HIGH_RESOLUTION_CACHE_MIB),
+			readLong(properties, "diskCacheMiB", DEFAULT_DISK_CACHE_MIB),
 			targetResolution,
 			Boolean.parseBoolean(properties.getProperty("debugTintLowResolution", "false").trim()),
 			Boolean.parseBoolean(properties.getProperty("enableOnLaunch", "true").trim())
@@ -233,6 +257,7 @@ public record LodConfig(
 		properties.setProperty("highResolutionDistance", Double.toString(config.highResolutionDistance()));
 		properties.setProperty("hysteresis", Double.toString(config.hysteresis()));
 		properties.setProperty("highResolutionCacheMiB", Long.toString(config.highResolutionCacheMiB()));
+		properties.setProperty("diskCacheMiB", Long.toString(config.diskCacheMiB()));
 		properties.setProperty("targetResolution", Integer.toString(config.targetResolution()));
 		properties.setProperty("debugTintLowResolution", Boolean.toString(config.debugTintLowResolution()));
 		properties.setProperty("enableOnLaunch", Boolean.toString(config.enableOnLaunch()));

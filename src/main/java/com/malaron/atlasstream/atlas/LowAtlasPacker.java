@@ -24,7 +24,7 @@ public final class LowAtlasPacker {
 					|| sprite.paddingX() < 0 || sprite.paddingY() < 0) {
 				throw new IllegalArgumentException("Sprite dimensions must be positive and padding non-negative");
 			}
-			int factor = reductionFactor(sprite.width(), sprite.height(), targetResolution);
+			int factor = reductionFactorForSprite(sprite, targetResolution);
 			int paddingX = Math.ceilDiv(sprite.paddingX(), factor);
 			int paddingY = Math.ceilDiv(sprite.paddingY(), factor);
 			int width = Math.max(1, Math.ceilDiv(sprite.width(), factor));
@@ -70,6 +70,10 @@ public final class LowAtlasPacker {
 		int sourceWidth,
 		int sourceHeight
 	) {
+		if (sourceWidth > maximumPreservedDimension()
+				|| sourceHeight > maximumPreservedDimension()) {
+			return null;
+		}
 		Map<Identifier, Placement> placements = new LinkedHashMap<>();
 		for (Sprite sprite : sprites) {
 			if (sprite.sourceX() < sprite.paddingX()
@@ -78,7 +82,7 @@ public final class LowAtlasPacker {
 					|| sprite.sourceY() + sprite.height() + sprite.paddingY() > sourceHeight) {
 				return null;
 			}
-			int factor = reductionFactor(sprite.width(), sprite.height(), targetResolution);
+			int factor = reductionFactorForSprite(sprite, targetResolution);
 			placements.put(
 				sprite.identifier(),
 				new Placement(
@@ -96,6 +100,10 @@ public final class LowAtlasPacker {
 		return new Layout(sourceWidth, sourceHeight, Map.copyOf(placements));
 	}
 
+	private static int maximumPreservedDimension() {
+		return 16384;
+	}
+
 	public static int reductionFactor(int width, int height, int targetResolution) {
 		int factor = 1;
 		while (Math.max(Math.ceilDiv(width, factor), Math.ceilDiv(height, factor)) > targetResolution) {
@@ -105,6 +113,12 @@ public final class LowAtlasPacker {
 			factor <<= 1;
 		}
 		return factor;
+	}
+
+	private static int reductionFactorForSprite(Sprite sprite, int targetResolution) {
+		return sprite.identifier().getPath().startsWith("entity/conduit/")
+			? 1
+			: reductionFactor(sprite.width(), sprite.height(), targetResolution);
 	}
 
 	private static List<Placement> placeInShelves(List<Placement> placements, int atlasWidth) {

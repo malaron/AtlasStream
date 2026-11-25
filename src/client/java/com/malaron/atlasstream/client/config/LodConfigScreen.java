@@ -41,6 +41,7 @@ final class LodConfigScreen {
 		};
 		double[] hysteresis = {current.hysteresis()};
 		long[] cacheMiB = {current.highResolutionCacheMiB()};
+		long[] diskCacheMiB = {current.diskCacheMiB()};
 		int[] targetResolution = {current.targetResolution()};
 		boolean[] tint = {current.debugTintLowResolution()};
 		boolean[] onLaunch = {current.enableOnLaunch()};
@@ -152,6 +153,17 @@ final class LodConfigScreen {
 			.controller(TickBoxControllerBuilder::create)
 			.build();
 
+		Option<Long> diskCacheOption = Option.<Long>createBuilder()
+			.name(Component.literal("Disk cache budget (MiB)"))
+			.description(OptionDescription.of(Component.literal(
+				"Combined disk cache budget for reduced atlases and processed tiles. 0 disables new cache writes."
+			)))
+			.binding(defaults.diskCacheMiB(), () -> diskCacheMiB[0], value -> diskCacheMiB[0] = value)
+			.controller(option -> LongSliderControllerBuilder.create(option)
+				.range(0L, LodConfig.MAX_DISK_CACHE_MIB)
+				.step(256L))
+			.build();
+
 		YetAnotherConfigLib config = YetAnotherConfigLib.createBuilder()
 			.title(Component.literal("AtlasStream"))
 			.category(ConfigCategory.createBuilder()
@@ -161,6 +173,7 @@ final class LodConfigScreen {
 				.option(distanceOption)
 				.option(hysteresisOption)
 				.option(cacheOption)
+				.option(diskCacheOption)
 				.option(tintOption)
 				.option(onLaunchOption)
 				.build())
@@ -171,6 +184,7 @@ final class LodConfigScreen {
 						distance,
 						LodConfig.clampHysteresis(distance, hysteresis[0]),
 						cacheMiB[0],
+						diskCacheMiB[0],
 						targetResolution[0],
 						tint[0],
 						onLaunch[0]

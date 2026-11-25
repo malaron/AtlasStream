@@ -10,8 +10,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import javax.imageio.ImageIO;
 
@@ -71,6 +73,9 @@ public final class AtlasRuntimeState {
 	private static final int MAX_TILE_UPLOADS_PER_TICK = 4;
 	private static final long MAX_TILE_UPLOAD_TIME_NANOS_PER_TICK = 4_000_000L;
 	private static final AtomicBoolean BUILDING = new AtomicBoolean();
+	private static final AtomicLong BUILD_SERIAL = new AtomicLong();
+	private static volatile long activeBuildSerial;
+	private static volatile CompletableFuture<?> activeBuildFuture;
 	private static final VirtualTextureRequestTracker VIRTUAL_TEXTURE_REQUEST_TRACKER =
 		new VirtualTextureRequestTracker();
 	private static final VirtualTextureRequestTracker pendingVirtualTextureQuads = new VirtualTextureRequestTracker();
@@ -95,6 +100,7 @@ public final class AtlasRuntimeState {
 	private static volatile boolean lowAtlasOriginalLayout;
 	private static volatile boolean screenEffectUsesNearAtlas;
 	private static final AtomicBoolean SCREEN_OVERLAY_REMAP_LOGGED = new AtomicBoolean();
+	private static final Set<String> CONDUIT_REMAP_LOGGED = new HashSet<>();
 	private static volatile VirtualTextureGpuPageTable virtualTextureGpuPageTable;
 	private static volatile VirtualTextureTileBuilder virtualTextureTileBuilder;
 	private static volatile VirtualTextureGpuCache virtualTextureGpuCache;
@@ -115,14 +121,43 @@ public final class AtlasRuntimeState {
 	private AtlasRuntimeState() {
 	}
 
+	private static void cancelActiveBuild() {
+		CompletableFuture<?> future = activeBuildFuture;
+		boolean hadActiveBuild = future != null || BUILDING.get();
+		if (!hadActiveBuild) {
+			return;
+		}
+		generation++;
+		if (future != null) {
+			future.cancel(true);
+		}
+		activeBuildSerial = BUILD_SERIAL.incrementAndGet();
+		BUILDING.set(false);
+		reloadBuildRunning = false;
+		parkedActivation = null;
+		AtlasStream.LOGGER.info("Cancelled stale low-resolution atlas build");
+	}
+
 	public static GpuTextureView reloadFallbackView(TextureAtlas atlas) {
 		GpuTextureView fallback = reloadFallbackView;
-		return fallback != null && TextureAtlas.LOCATION_BLOCKS.equals(atlas.location()) ? fallback : null;
+		LowAtlasRemap mapping = reloadFallbackMapping;
+		TextureAtlasAccessor geometry = (TextureAtlasAccessor) atlas;
+		return fallback != null && mapping != null
+				&& TextureAtlas.LOCATION_BLOCKS.equals(atlas.location())
+				&& mapping.matches(geometry.atlasStream$getWidth(), geometry.atlasStream$getHeight())
+			? fallback
+			: null;
 	}
 
 	public static GpuTexture reloadFallbackTexture(TextureAtlas atlas) {
 		GpuTexture fallback = reloadFallbackTexture;
-		return fallback != null && TextureAtlas.LOCATION_BLOCKS.equals(atlas.location()) ? fallback : null;
+		LowAtlasRemap mapping = reloadFallbackMapping;
+		TextureAtlasAccessor geometry = (TextureAtlasAccessor) atlas;
+		return fallback != null && mapping != null
+				&& TextureAtlas.LOCATION_BLOCKS.equals(atlas.location())
+				&& mapping.matches(geometry.atlasStream$getWidth(), geometry.atlasStream$getHeight())
+			? fallback
+			: null;
 	}
 
 	public static void setBuildPhase(String message) {
@@ -230,6 +265,10 @@ public final class AtlasRuntimeState {
 			this.placements = List.copyOf(layout.placements().values());
 		}
 
+		private boolean matches(int width, int height) {
+			return Math.round(sourceWidth) == width && Math.round(sourceHeight) == height;
+		}
+
 		private float[] map(float u, float v) {
 			return map(u, v, false);
 		}
@@ -294,6 +333,8 @@ public final class AtlasRuntimeState {
 		if (!BUILDING.compareAndSet(false, true)) {
 			throw new IllegalStateException("A low-resolution atlas preview build is already running");
 		}
+		long thisBuildSerial = BUILD_SERIAL.incrementAndGet();
+		activeBuildSerial = thisBuildSerial;
 		setBuildPhase("Preparing texture atlas...");
 		long buildGeneration;
 		List<SpriteRegion> regions;
@@ -327,7 +368,7 @@ public final class AtlasRuntimeState {
 		}
 
 		SCREEN_OVERLAY_REMAP_LOGGED.set(false);
-		CompletableFuture.supplyAsync(() -> {
+		CompletableFuture<?> buildFuture = CompletableFuture.supplyAsync(() -> {
 			setBuildPhase("Building low-resolution atlas...");
 			try {
 				return createLowAtlas(
@@ -338,16 +379,27 @@ public final class AtlasRuntimeState {
 					atlasHeight,
 					mipLevelCount,
 					targetResolution,
-					reducePbr
+					reducePbr,
+					buildGeneration
 				);
 			} catch (IOException exception) {
 				throw new java.util.concurrent.CompletionException(exception);
 			}
-		}).whenComplete((image, failure) -> Minecraft.getInstance().execute(() -> activateOrPark(defer, () -> {
+		});
+		activeBuildFuture = buildFuture;
+		buildFuture.whenComplete((imageValue, failure) -> Minecraft.getInstance().execute(() -> activateOrPark(defer, () -> {
 			try {
+				LowAtlasImage image = (LowAtlasImage) imageValue;
 				setBuildPhase("Activating texture streaming...");
+				if (!ownsBuild(thisBuildSerial)) {
+					return;
+				}
 				if (failure != null) {
 					Throwable cause = failure.getCause() == null ? failure : failure.getCause();
+					if (cause instanceof CancellationException || cause instanceof BuildCancelledException) {
+						AtlasStream.LOGGER.info("Stopped stale low-resolution atlas build");
+						return;
+					}
 					throw new IllegalStateException("Could not build the low-resolution block atlas", cause);
 				}
 				boolean releaseHighResolutionAtlas = enableDistancePreview;
@@ -408,7 +460,7 @@ public final class AtlasRuntimeState {
 					)
 				);
 				if (enableDistancePreview && isNearAtlasActive() && !isNearAtlasWarm()) {
-					setBuildPhase("Low res atlas ready; nearby high-resolution detail stream beginning...");
+					setBuildPhase("Low res atlas ready; nearby high-resolution detail stream starting...");
 				} else if (!enableDistancePreview) {
 					setBuildPhase("Low-resolution atlas ready");
 					clearBuildPhase();
@@ -423,10 +475,30 @@ public final class AtlasRuntimeState {
 				);
 				clearBuildPhase();
 			} finally {
-				reloadBuildRunning = false;
-				BUILDING.set(false);
+				if (ownsBuild(thisBuildSerial)) {
+					reloadBuildRunning = false;
+					BUILDING.set(false);
+					activeBuildFuture = null;
+				}
 			}
 		})));
+	}
+
+	private static boolean ownsBuild(long serial) {
+		return serial == activeBuildSerial;
+	}
+
+	private static boolean isBuildCurrent(long buildGeneration) {
+		return generation == buildGeneration && !Thread.currentThread().isInterrupted();
+	}
+
+	static void checkBuildCurrent(long buildGeneration) throws BuildCancelledException {
+		if (!isBuildCurrent(buildGeneration)) {
+			throw new BuildCancelledException();
+		}
+	}
+
+	static final class BuildCancelledException extends RuntimeException {
 	}
 
 	private static boolean deferActivationUntilIris;
@@ -525,6 +597,57 @@ public final class AtlasRuntimeState {
 
 	public static boolean isReducedBlockAtlasView(GpuTextureView view) {
 		return !lowAtlasOriginalLayout && view != null && view == lowResolutionTextureView;
+	}
+
+	public static GpuTextureView lowAtlasViewForFullSparseEntity(GpuTextureView view) {
+		NearAtlas near = nearAtlas;
+		if (near != null && near.isUsable() && view == near.albedoView()) {
+			return lowResolutionTextureView;
+		}
+		return view;
+	}
+
+	public static net.minecraft.client.renderer.texture.UvMapping remapEntityBlockUv(
+		net.minecraft.client.renderer.texture.UvMapping mapping
+	) {
+		if (mapping == null) {
+			return null;
+		}
+		LowAtlasRemap remap = lowAtlasRemap;
+		if (remap == null
+				|| !(mapping instanceof TextureAtlasSprite sprite)
+				|| !TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())
+				|| lowAtlasOriginalLayout) {
+			return mapping;
+		}
+		float[] start = remap.map(sprite.getU(0), sprite.getV(0));
+		float[] end = remap.map(sprite.getU(1), sprite.getV(1), true);
+		Identifier name = sprite.contents().name();
+		if (name.getPath().startsWith("entity/conduit/")
+				&& CONDUIT_REMAP_LOGGED.size() < 12
+				&& CONDUIT_REMAP_LOGGED.add(name.toString())) {
+			AtlasStream.LOGGER.info(
+				"Conduit low remap: sprite={}, source=({},{})-({},{ }), mapped=({},{})-({},{ }), placement={}",
+				name,
+				sprite.getU(0), sprite.getV(0), sprite.getU(1), sprite.getV(1),
+				start[0], start[1], end[0], end[1],
+				remap.placementAt(sprite.getU(0), sprite.getV(0))
+			);
+		}
+		return new RemappedUvMapping(start[0], start[1], end[0], end[1]);
+	}
+
+	private record RemappedUvMapping(float u0, float v0, float u1, float v1)
+		implements net.minecraft.client.renderer.texture.UvMapping {
+		@Override
+		public float getU(float value) {
+			return u0 + (u1 - u0) * value;
+		}
+
+		@Override
+		public float getV(float value) {
+			return v0 + (v1 - v0) * value;
+		}
 	}
 
 	public static boolean isLowAtlasOriginalLayout() {
@@ -1419,7 +1542,7 @@ public final class AtlasRuntimeState {
 		lowPreviewEnabled = false;
 		distancePreviewEnabled = false;
 		if (BUILDING.get()) {
-			generation++;
+			cancelActiveBuild();
 		}
 	}
 
@@ -1766,14 +1889,17 @@ public final class AtlasRuntimeState {
 	}
 
 	public static synchronized void beforeAtlasReload(TextureAtlas atlas) {
-		if (TextureAtlas.LOCATION_BLOCKS.equals(atlas.location()) && previewedAtlas == atlas) {
-			retainLowAtlasFallback();
-			setBuildPhase("Resource pack changed; preparing AtlasStream...");
-			reloadRebuildPending |= distancePreviewEnabled;
-			irisSwitchReloadRequested = false;
-			lowPreviewEnabled = false;
-			distancePreviewEnabled = false;
-			detachAtlasOwnedLowResolutionTexture();
+		if (TextureAtlas.LOCATION_BLOCKS.equals(atlas.location())) {
+			cancelActiveBuild();
+			if (previewedAtlas == atlas) {
+				retainLowAtlasFallback();
+				setBuildPhase("Resource pack changed; preparing AtlasStream...");
+				reloadRebuildPending |= distancePreviewEnabled;
+				irisSwitchReloadRequested = false;
+				lowPreviewEnabled = false;
+				distancePreviewEnabled = false;
+				detachAtlasOwnedLowResolutionTexture();
+			}
 		}
 	}
 
@@ -1865,8 +1991,10 @@ public final class AtlasRuntimeState {
 		int sourceAtlasHeight,
 		int sourceMipLevelCount,
 		int targetResolution,
-		boolean reducePbr
+		boolean reducePbr,
+		long buildGeneration
 	) throws IOException {
+		checkBuildCurrent(buildGeneration);
 		if (sourceMipLevelCount <= 0) {
 			throw new IOException("The source block atlas has no mip levels");
 		}
@@ -1946,7 +2074,8 @@ public final class AtlasRuntimeState {
 					layout,
 					lowMipLevelCount,
 					totalImageBytes,
-					cachedAnimations
+					cachedAnimations,
+					buildGeneration
 				);
 				NativeImage remap = createLowAtlasRemap(
 					layout, sourceAtlasWidth, sourceAtlasHeight, sourceMipLevelCount
@@ -1983,6 +2112,7 @@ public final class AtlasRuntimeState {
 					));
 				}
 				for (SpriteRegion region : regions) {
+					checkBuildCurrent(buildGeneration);
 					com.malaron.atlasstream.atlas.LowAtlasPacker.Placement placement =
 						layout.placements().get(region.identifier());
 					if (placement != null && placement.factor() == 1
@@ -1997,7 +2127,7 @@ public final class AtlasRuntimeState {
 				pbrFuture = CompletableFuture.supplyAsync(() -> {
 					try {
 						return IrisPbrAtlasReducer.buildRepacked(
-							resourceManager, regions, layout, lowMipLevelCount
+							resourceManager, regions, layout, lowMipLevelCount, buildGeneration
 						);
 					} catch (IOException exception) {
 						throw new java.io.UncheckedIOException(exception);
@@ -2009,11 +2139,22 @@ public final class AtlasRuntimeState {
 			AtomicInteger loadedSprites = new AtomicInteger();
 			AtomicInteger skippedSprites = new AtomicInteger();
 			regions.parallelStream().forEach(region -> {
+				checkBuildCurrent(buildGeneration);
 				com.malaron.atlasstream.atlas.LowAtlasPacker.Placement placement = layout.placements().get(region.identifier());
 				if (placement == null) {
 					return;
 				}
 				try {
+					NativeImage[] decodedMips = spriteMipImages.get(region.identifier());
+					if (!region.animated() && decodedMips != null && decodedMips.length > 0) {
+						if (preserveOriginalLayout && placement.factor() != 1) {
+							writeRepackedSpriteMips(mipLevels, decodedMips, region, placement);
+						} else if (!preserveOriginalLayout) {
+							writeRepackedSprite(atlas, decodedMips[0], region, placement);
+						}
+						loadedSprites.incrementAndGet();
+						return;
+					}
 					Identifier textureId = Identifier.fromNamespaceAndPath(
 						region.identifier().getNamespace(), "textures/" + region.identifier().getPath() + ".png"
 					);
@@ -2070,7 +2211,18 @@ public final class AtlasRuntimeState {
 			if (pbrFuture != null) {
 				try {
 					pbrImages = pbrFuture.join();
+				} catch (java.util.concurrent.CompletionException exception) {
+					if (exception.getCause() instanceof BuildCancelledException cancelled) {
+						throw cancelled;
+					}
+					AtlasStream.LOGGER.error(
+						"Could not reduce Iris PBR maps; they stay full resolution",
+						exception.getCause()
+					);
 				} catch (RuntimeException exception) {
+					if (exception instanceof BuildCancelledException cancelled) {
+						throw cancelled;
+					}
 					AtlasStream.LOGGER.error("Could not reduce Iris PBR maps; they stay full resolution", exception);
 				}
 			}
@@ -2082,6 +2234,7 @@ public final class AtlasRuntimeState {
 				skippedSprites.get()
 			);
 			if (cacheKey != null) {
+				checkBuildCurrent(buildGeneration);
 				ReducedAtlasCache.store(cacheKey, mipLevels, pbrImages);
 			}
 			return new LowAtlasImage(
@@ -2110,9 +2263,11 @@ public final class AtlasRuntimeState {
 		com.malaron.atlasstream.atlas.LowAtlasPacker.Layout layout,
 		int mipLevelCount,
 		long[] totalImageBytes,
-		List<AnimatedSpriteData> animations
+		List<AnimatedSpriteData> animations,
+		long buildGeneration
 	) throws IOException {
 		for (SpriteRegion region : regions) {
+			checkBuildCurrent(buildGeneration);
 			if (!region.animated()) {
 				continue;
 			}
@@ -2408,6 +2563,26 @@ public final class AtlasRuntimeState {
 		}
 	}
 
+	private static void writeRepackedSprite(
+		NativeImage atlas,
+		NativeImage source,
+		SpriteRegion region,
+		com.malaron.atlasstream.atlas.LowAtlasPacker.Placement placement
+	) {
+		int factor = placement.factor();
+		for (int destinationY = 0; destinationY < placement.paddedHeight(); destinationY++) {
+			int sourceY = (destinationY - placement.paddingY()) * factor;
+			for (int destinationX = 0; destinationX < placement.paddedWidth(); destinationX++) {
+				int sourceX = (destinationX - placement.paddingX()) * factor;
+				atlas.setPixel(
+					placement.x() + destinationX,
+					placement.y() + destinationY,
+					averageImagePixels(source, sourceX, sourceY, region.width(), region.height(), factor)
+				);
+			}
+		}
+	}
+
 	private static void writeOriginalSpriteMips(
 		List<NativeImage> destinationMips,
 		NativeImage[] sourceMips,
@@ -2492,6 +2667,55 @@ public final class AtlasRuntimeState {
 		}
 	}
 
+	private static void writeRepackedSpriteMips(
+		List<NativeImage> destinationMips,
+		NativeImage[] sourceMips,
+		SpriteRegion region,
+		com.malaron.atlasstream.atlas.LowAtlasPacker.Placement placement
+	) {
+		for (int level = 0; level < destinationMips.size(); level++) {
+			int requestedFactor = placement.factor() << level;
+			int sourceLevel = Math.min(
+				Integer.numberOfTrailingZeros(requestedFactor),
+				sourceMips.length - 1
+			);
+			NativeImage source = sourceMips[sourceLevel];
+			int residualFactor = Math.max(1, requestedFactor >> sourceLevel);
+			int mipDivisor = 1 << level;
+			int paddedWidth = Math.max(
+				Math.max(1, Math.ceilDiv(placement.width(), mipDivisor)),
+				Math.ceilDiv(placement.paddedWidth(), mipDivisor)
+			);
+			int paddedHeight = Math.max(
+				Math.max(1, Math.ceilDiv(placement.height(), mipDivisor)),
+				Math.ceilDiv(placement.paddedHeight(), mipDivisor)
+			);
+			int paddingX = placement.paddingX() >> level;
+			int paddingY = placement.paddingY() >> level;
+			int originX = placement.x() >> level;
+			int originY = placement.y() >> level;
+			NativeImage destination = destinationMips.get(level);
+			for (int y = 0; y < paddedHeight; y++) {
+				int sourceY = (y - paddingY) * residualFactor;
+				for (int x = 0; x < paddedWidth; x++) {
+					int sourceX = (x - paddingX) * residualFactor;
+					destination.setPixel(
+						originX + x,
+						originY + y,
+						averageImagePixels(
+							source,
+							sourceX,
+							sourceY,
+							Math.max(1, source.getWidth()),
+							Math.max(1, source.getHeight()),
+							residualFactor
+						)
+					);
+				}
+			}
+		}
+	}
+
 	private static int averageImagePixels(
 		BufferedImage source, int x, int y, int width, int height, int factor
 	) {
@@ -2504,6 +2728,35 @@ public final class AtlasRuntimeState {
 			int clampedY = Math.clamp(sampleY, 0, height - 1);
 			for (int sampleX = x; sampleX < x + factor; sampleX++) {
 				int argb = source.getRGB(Math.clamp(sampleX, 0, width - 1), clampedY);
+				int alpha = argb >>> 24;
+				alphaSum += alpha;
+				redSum += (argb >>> 16 & 0xFF) * (long) alpha;
+				greenSum += (argb >>> 8 & 0xFF) * (long) alpha;
+				blueSum += (argb & 0xFF) * (long) alpha;
+				count++;
+			}
+		}
+		if (alphaSum == 0) {
+			return 0;
+		}
+		return ((int) ((alphaSum + count / 2) / count) << 24)
+			| ((int) ((redSum + alphaSum / 2) / alphaSum) << 16)
+			| ((int) ((greenSum + alphaSum / 2) / alphaSum) << 8)
+			| (int) ((blueSum + alphaSum / 2) / alphaSum);
+	}
+
+	private static int averageImagePixels(
+		NativeImage source, int x, int y, int width, int height, int factor
+	) {
+		long alphaSum = 0;
+		long redSum = 0;
+		long greenSum = 0;
+		long blueSum = 0;
+		int count = 0;
+		for (int sampleY = y; sampleY < y + factor; sampleY++) {
+			int clampedY = Math.clamp(sampleY, 0, height - 1);
+			for (int sampleX = x; sampleX < x + factor; sampleX++) {
+				int argb = source.getPixel(Math.clamp(sampleX, 0, width - 1), clampedY);
 				int alpha = argb >>> 24;
 				alphaSum += alpha;
 				redSum += (argb >>> 16 & 0xFF) * (long) alpha;
@@ -3465,7 +3718,7 @@ public final class AtlasRuntimeState {
 		NativeImage mipLevel = new NativeImage(width, height, true);
 		try {
 			int previousLevel = level - 1;
-			for (SpriteRegion region : regions) {
+			regions.parallelStream().forEach(region -> {
 				int sourceLeft = Math.max(0, (region.x() - region.paddingX()) >> previousLevel);
 				int sourceTop = Math.max(0, (region.y() - region.paddingY()) >> previousLevel);
 				int sourceRight = Math.min(
@@ -3506,7 +3759,7 @@ public final class AtlasRuntimeState {
 						region.paddingY() >> level
 					);
 				}
-			}
+			});
 			return mipLevel;
 		} catch (RuntimeException | Error exception) {
 			mipLevel.close();

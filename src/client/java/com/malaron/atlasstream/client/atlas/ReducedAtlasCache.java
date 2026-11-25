@@ -14,7 +14,6 @@ import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.stream.Stream;
@@ -38,8 +37,7 @@ final class ReducedAtlasCache {
 	private static final int MAGIC = 0x4C4F4C41;
 	private static final int FORMAT = 1;
 	// Bump whenever the reduced atlas build output changes for the same inputs.
-	private static final int BUILD_VERSION = 3;
-	private static final long MAX_TOTAL_BYTES = 3L << 30;
+	private static final int BUILD_VERSION = 4;
 	private static final int MAX_IMAGES_PER_KIND = 16;
 	private static final int HEADER_BYTES = 20;
 
@@ -221,7 +219,7 @@ final class ReducedAtlasCache {
 			for (NativeImage image : all) {
 				size += (long) image.getWidth() * image.getHeight() * 4L;
 			}
-			if (size > MAX_TOTAL_BYTES || Files.getFileStore(directory).getUsableSpace() < size + (256L << 20)) {
+			if (!DiskCacheBudget.hasSpaceFor(directory, size)) {
 				return;
 			}
 			CRC32 crc = new CRC32();
@@ -249,7 +247,7 @@ final class ReducedAtlasCache {
 				Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
 			}
 			AtlasStream.LOGGER.info("Saved reduced atlas cache entry ({} MiB)", size >> 20);
-			prune(directory, target);
+			DiskCacheBudget.prune(directory(), target);
 		} catch (IOException | RuntimeException exception) {
 			AtlasStream.LOGGER.warn("Could not save the reduced atlas cache: {}", exception.toString());
 			try {
@@ -265,34 +263,4 @@ final class ReducedAtlasCache {
 		}
 	}
 
-	// Drops the least recently used entries once the folder grows past the cap; the entry just written stays.
-	private static void prune(Path directory, Path keep) throws IOException {
-		List<Path> entries;
-		try (Stream<Path> list = Files.list(directory)) {
-			entries = list.filter(path -> path.getFileName().toString().endsWith(".bin"))
-				.sorted(Comparator.comparing(ReducedAtlasCache::modified))
-				.toList();
-		}
-		long total = 0;
-		for (Path entry : entries) {
-			total += Files.size(entry);
-		}
-		for (Path entry : entries) {
-			if (total <= MAX_TOTAL_BYTES) {
-				break;
-			}
-			if (!entry.equals(keep)) {
-				total -= Files.size(entry);
-				Files.deleteIfExists(entry);
-			}
-		}
-	}
-
-	private static long modified(Path path) {
-		try {
-			return Files.getLastModifiedTime(path).toMillis();
-		} catch (IOException exception) {
-			return 0L;
-		}
-	}
 }

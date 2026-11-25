@@ -17,7 +17,6 @@ import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -25,7 +24,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Stream;
 import java.util.zip.CRC32;
 
 import com.malaron.atlasstream.AtlasStream;
@@ -43,7 +41,6 @@ final class PackTileCache {
 	private static final int FORMAT = 1;
 	// Bump whenever the reduced tile output changes for the same inputs.
 	private static final int TILE_VERSION = 1;
-	private static final long MAX_TOTAL_BYTES = 3L << 30;
 	private static final ValueLayout.OfInt INT = ValueLayout.JAVA_INT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
 
 	private final int factor;
@@ -125,7 +122,7 @@ final class PackTileCache {
 			pack.ifPresent(Pack::close);
 		}
 		try {
-			prune();
+			DiskCacheBudget.prune(directory().getParent(), null);
 		} catch (IOException | RuntimeException exception) {
 			AtlasStream.LOGGER.warn("Could not prune the tile cache: {}", exception.toString());
 		}
@@ -135,38 +132,6 @@ final class PackTileCache {
 			"Tile cache ({}): {} sprites from cached tiles, {} decoded, {} pack file(s) updated{}",
 			label, hits.get(), decoded.get(), written, skipped.isEmpty() ? "" : "; uncacheable packs: " + skipped
 		);
-	}
-
-	private static void prune() throws IOException {
-		Path directory = directory();
-		if (!Files.isDirectory(directory)) {
-			return;
-		}
-		List<Path> files;
-		try (Stream<Path> list = Files.list(directory)) {
-			files = list.filter(path -> path.getFileName().toString().endsWith(".tiles"))
-				.sorted(Comparator.comparing(PackTileCache::modified))
-				.toList();
-		}
-		long total = 0;
-		for (Path file : files) {
-			total += Files.size(file);
-		}
-		for (Path file : files) {
-			if (total <= MAX_TOTAL_BYTES) {
-				break;
-			}
-			total -= Files.size(file);
-			Files.deleteIfExists(file);
-		}
-	}
-
-	private static long modified(Path path) {
-		try {
-			return Files.getLastModifiedTime(path).toMillis();
-		} catch (IOException exception) {
-			return 0L;
-		}
 	}
 
 	final class Pack {
@@ -247,6 +212,9 @@ final class PackTileCache {
 		}
 
 		private boolean save() {
+			if (DiskCacheBudget.bytes() == 0) {
+				return false;
+			}
 			if (added.isEmpty()) {
 				return false;
 			}
@@ -262,6 +230,18 @@ final class PackTileCache {
 					}
 				}
 				count += kept.size();
+				long estimatedSize = 20;
+				for (Span span : kept) {
+					estimatedSize += span.end() - span.start();
+				}
+				for (Map.Entry<String, int[]> entry : added.entrySet()) {
+					estimatedSize += 8L + entry.getKey().getBytes(StandardCharsets.UTF_8).length
+						+ entry.getValue().length * 4L;
+				}
+				Files.createDirectories(file.getParent());
+				if (!DiskCacheBudget.hasSpaceFor(file.getParent(), estimatedSize)) {
+					return false;
+				}
 				try (FileChannel channel = FileChannel.open(temp, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
 						StandardOpenOption.TRUNCATE_EXISTING)) {
 					ByteBuffer header = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN);

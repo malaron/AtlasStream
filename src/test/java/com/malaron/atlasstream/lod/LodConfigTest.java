@@ -22,6 +22,7 @@ class LodConfigTest {
 		assertEquals(new LodConfig(128.0, 16.0, 1024, 64), LodConfig.load(file));
 		assertTrue(Files.exists(file));
 		assertTrue(Files.readString(file).contains("highResolutionCacheMiB=1024"));
+		assertTrue(Files.readString(file).contains("diskCacheMiB=6144"));
 		assertTrue(Files.readString(file).contains("targetResolution=64"));
 	}
 
@@ -106,5 +107,17 @@ class LodConfigTest {
 		Files.writeString(file, "highResolutionCacheMiB=32\n");
 
 		assertThrows(IllegalArgumentException.class, () -> LodConfig.load(file));
+
+		Files.writeString(file, "diskCacheMiB=-1\n");
+		assertThrows(IllegalArgumentException.class, () -> LodConfig.load(file));
+	}
+
+	@Test
+	void updatesDiskCacheBudget() {
+		LodConfig config = LodConfig.defaults();
+
+		assertEquals(0L, config.withDiskCacheMiB(0).diskCacheMiB());
+		assertEquals(32L * 1024, config.withDiskCacheMiB(32L * 1024).diskCacheMiB());
+		assertThrows(IllegalArgumentException.class, () -> config.withDiskCacheMiB(64L * 1024 + 1));
 	}
 }
