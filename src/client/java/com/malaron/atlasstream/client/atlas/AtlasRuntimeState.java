@@ -2930,8 +2930,6 @@ public final class AtlasRuntimeState {
 				.orElse(0);
 			replaceLowAtlasRemap(remapTexture, remapView);
 			closeReloadFallback();
-			animatedSprites = image.transferAnimatedSprites();
-			animatedStateMismatchLogged = false;
 			if (releaseHighResolutionAtlas) {
 				Object pbrHolder = image.isOriginalLayout()
 					? IrisPbrAtlasReducer.holder(highResolutionTexture)
@@ -2981,6 +2979,8 @@ public final class AtlasRuntimeState {
 					replaceBlockAtlasWithLowResolution(atlas, highResolutionTexture, texture, textureView);
 				}
 			}
+			animatedSprites = image.transferAnimatedSprites();
+			animatedStateMismatchLogged = false;
 			initialized = true;
 		} finally {
 			if (!initialized) {
