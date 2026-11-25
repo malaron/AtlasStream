@@ -174,44 +174,8 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 
 	@Inject(method = "patchVanilla", at = @At("RETURN"), cancellable = true, remap = false, require = 0)
 	private static void atlasStream$remapVanilla(CallbackInfoReturnable<Map<Object, String>> callback) {
-		Map<Object, String> result = callback.getReturnValue();
-		if (result == null) {
-			return;
-		}
-		Map<Object, String> patched = new LinkedHashMap<>(result);
-		boolean changed = false;
-		for (Map.Entry<Object, String> entry : patched.entrySet()) {
-			if (!"VERTEX".equals(String.valueOf(entry.getKey()))) {
-				continue;
-			}
-			String source = entry.getValue();
-			java.util.regex.Matcher declaration = UV0_DECLARATION.matcher(source);
-			if (!declaration.find()) {
-				continue;
-			}
-			String functions =
-				(GTEXTURE_DECLARATION.matcher(source).find() ? "" : "uniform sampler2D gtexture;\n")
-				+ LOW_REMAP_FUNCTION + REMAP_FUNCTION + ATLAS_ONLY_FUNCTION;
-			// Include declarations before iris_UV0 when identifying the midpoint attribute.
-			String patchedSource = VanillaNearShaderPatcher.patchReferences(source);
-			if (patchedSource.equals(source)) {
-				continue;
-			}
-			declaration = UV0_DECLARATION.matcher(patchedSource);
-			declaration.find();
-			String head = patchedSource.substring(0, declaration.end());
-			String tail = patchedSource.substring(declaration.end());
-			entry.setValue(head + "\n" + functions + tail);
-			changed = true;
-		}
-		if (changed) {
-			com.malaron.atlasstream.client.atlas.AtlasRuntimeState.markVanillaRemapAvailable();
-			if (!vanillaLogged) {
-				vanillaLogged = true;
-				AtlasStream.LOGGER.info("Patched Iris-transformed vanilla vertex shaders for the near UV remap");
-			}
-			callback.setReturnValue(patched);
-		}
+		// Sodium terrain shaders are patched below. Vanilla/entity shaders must remain byte-for-byte native:
+		// their textures and multipart models are not part of the block-atlas layout.
 	}
 
 	@Inject(method = "patchSodium", at = @At("RETURN"), cancellable = true, remap = false)
