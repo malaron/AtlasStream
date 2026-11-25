@@ -10,6 +10,7 @@ import java.util.Objects;
 import net.minecraft.resources.Identifier;
 
 public final class LowAtlasPacker {
+	private static final int CONTAINER_COMPATIBILITY_RESOLUTION = 256;
 	private LowAtlasPacker() {
 	}
 
@@ -24,7 +25,7 @@ public final class LowAtlasPacker {
 					|| sprite.paddingX() < 0 || sprite.paddingY() < 0) {
 				throw new IllegalArgumentException("Sprite dimensions must be positive and padding non-negative");
 			}
-			int factor = reductionFactor(sprite.width(), sprite.height(), targetResolution);
+			int factor = reductionFactorForSprite(sprite, targetResolution);
 			int paddingX = Math.ceilDiv(sprite.paddingX(), factor);
 			int paddingY = Math.ceilDiv(sprite.paddingY(), factor);
 			int width = Math.max(1, Math.ceilDiv(sprite.width(), factor));
@@ -82,7 +83,7 @@ public final class LowAtlasPacker {
 					|| sprite.sourceY() + sprite.height() + sprite.paddingY() > sourceHeight) {
 				return null;
 			}
-			int factor = reductionFactor(sprite.width(), sprite.height(), targetResolution);
+			int factor = reductionFactorForSprite(sprite, targetResolution);
 			placements.put(
 				sprite.identifier(),
 				new Placement(
@@ -113,6 +114,19 @@ public final class LowAtlasPacker {
 			factor <<= 1;
 		}
 		return factor;
+	}
+
+	private static int reductionFactorForSprite(Sprite sprite, int targetResolution) {
+		int effectiveTarget = isContainerCompatibilitySprite(sprite)
+			? Math.max(targetResolution, CONTAINER_COMPATIBILITY_RESOLUTION)
+			: targetResolution;
+		return reductionFactor(sprite.width(), sprite.height(), effectiveTarget);
+	}
+
+	private static boolean isContainerCompatibilitySprite(Sprite sprite) {
+		String path = sprite.identifier().getPath();
+		return path.startsWith("entity/chest/")
+			|| path.startsWith("entity/shulker/");
 	}
 
 	private static List<Placement> placeInShelves(List<Placement> placements, int atlasWidth) {
