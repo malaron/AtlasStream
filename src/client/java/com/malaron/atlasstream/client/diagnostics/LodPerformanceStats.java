@@ -41,7 +41,6 @@ public final class LodPerformanceStats {
 	private static long batchClearNanos;
 	private static long batchClearCalls;
 	private static long batchClearRegions;
-	private static long nearBudgetRejections;
 	private static final List<Long> FRAME_NANOS = new ArrayList<>();
 
 	static {
@@ -84,7 +83,6 @@ public final class LodPerformanceStats {
 		batchClearNanos = 0;
 		batchClearCalls = 0;
 		batchClearRegions = 0;
-		nearBudgetRejections = 0;
 		FRAME_NANOS.clear();
 		sampleStartNanos = System.nanoTime();
 		recording = true;
@@ -226,12 +224,6 @@ public final class LodPerformanceStats {
 		}
 	}
 
-	public static synchronized void recordNearBudgetRejection() {
-		if (recording) {
-			nearBudgetRejections++;
-		}
-	}
-
 	public static synchronized List<String> stopAndFormat() {
 		if (!recording) {
 			return List.of();
@@ -309,11 +301,6 @@ public final class LodPerformanceStats {
 			toMilliseconds(batchClearNanos),
 			batchClearCalls,
 			batchClearRegions
-		));
-		lines.add(String.format(
-			Locale.ROOT,
-			"Near-atlas budget admission: %d sprite jobs blocked and left on low-res fallback",
-			nearBudgetRejections
 		));
 		appendFrameTiming(lines, seconds);
 		lines.add("Render-thread timings can include driver waits; they exclude GPU execution and other world-render work.");
