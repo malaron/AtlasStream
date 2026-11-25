@@ -598,6 +598,42 @@ public final class AtlasRuntimeState {
 		return !lowAtlasOriginalLayout && view != null && view == lowResolutionTextureView;
 	}
 
+	public static GpuTextureView lowAtlasViewForFullSparseEntity(GpuTextureView view) {
+		NearAtlas near = nearAtlas;
+		if (near != null && near.isUsable() && !near.isCompact() && view == near.albedoView()) {
+			return lowResolutionTextureView;
+		}
+		return view;
+	}
+
+	public static net.minecraft.client.renderer.texture.UvMapping remapEntityBlockUv(
+		net.minecraft.client.renderer.texture.UvMapping mapping
+	) {
+		LowAtlasRemap remap = lowAtlasRemap;
+		if (remap == null
+				|| !(mapping instanceof TextureAtlasSprite sprite)
+				|| !TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())
+				|| lowAtlasOriginalLayout) {
+			return mapping;
+		}
+		float[] start = remap.map(sprite.getU(0), sprite.getV(0));
+		float[] end = remap.map(sprite.getU(1), sprite.getV(1), true);
+		return new RemappedUvMapping(start[0], start[1], end[0], end[1]);
+	}
+
+	private record RemappedUvMapping(float u0, float v0, float u1, float v1)
+		implements net.minecraft.client.renderer.texture.UvMapping {
+		@Override
+		public float getU(float value) {
+			return u0 + (u1 - u0) * value;
+		}
+
+		@Override
+		public float getV(float value) {
+			return v0 + (v1 - v0) * value;
+		}
+	}
+
 	public static boolean isLowAtlasOriginalLayout() {
 		return lowAtlasOriginalLayout;
 	}

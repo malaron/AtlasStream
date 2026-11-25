@@ -8,6 +8,7 @@
 		"BlockModelRenderStateAccessor",
 		"BlockModelSpriteUsageMixin",
 		"ChunkVertexConsumerMixin",
+		"ConduitRendererUvMixin",
 		"ExtendedBlockModelSubmitMixin",
 		"FirstPersonItemSpriteMixin",
 		"GuiItemAtlasMixin",
