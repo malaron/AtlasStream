@@ -148,7 +148,7 @@ vec2 atlasStreamAtlasRemap(vec2 uv, vec2 anchor) {
         floor(header0.b * 255.0 + 0.5) + floor(header0.a * 255.0 + 0.5) * 256.0
     ) + 1;
     if (textureSize(gtexture, 0) != compactSize) {
-        return uv;
+        return atlasStreamLowRemap(uv);
     }
     return atlasStreamNearRemap(uv, anchor);
 }
