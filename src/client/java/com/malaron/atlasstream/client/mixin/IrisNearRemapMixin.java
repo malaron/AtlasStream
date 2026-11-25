@@ -191,7 +191,7 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 			}
 			String functions =
 				(GTEXTURE_DECLARATION.matcher(source).find() ? "" : "uniform sampler2D gtexture;\n")
-				+ REMAP_FUNCTION + LOW_REMAP_FUNCTION + ATLAS_ONLY_FUNCTION;
+				+ LOW_REMAP_FUNCTION + REMAP_FUNCTION + ATLAS_ONLY_FUNCTION;
 			// Include declarations before iris_UV0 when identifying the midpoint attribute.
 			String patchedSource = VanillaNearShaderPatcher.patchReferences(source);
 			if (patchedSource.equals(source)) {
@@ -235,7 +235,7 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 			// Translucent terrain stays on the low atlas but shares these programs, so the remap only applies when the
 			// bound diffuse texture is the compact near atlas.
 			String atlasFunctions = (GTEXTURE_DECLARATION.matcher(source).find() ? "" : "uniform sampler2D gtexture;\n")
-				+ REMAP_FUNCTION + LOW_REMAP_FUNCTION + ATLAS_ONLY_FUNCTION;
+				+ LOW_REMAP_FUNCTION + REMAP_FUNCTION + ATLAS_ONLY_FUNCTION;
 			String replaced = source.substring(0, function) + atlasFunctions + source.substring(function);
 			replaced = replaced.replace(
 				TEXCOORD_RETURN,
