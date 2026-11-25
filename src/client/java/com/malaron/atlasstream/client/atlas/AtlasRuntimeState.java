@@ -610,7 +610,9 @@ public final class AtlasRuntimeState {
 	public static net.minecraft.client.renderer.texture.UvMapping remapEntityBlockUv(
 		net.minecraft.client.renderer.texture.UvMapping mapping
 	) {
-		AtlasStream.LOGGER.info("Conduit UV mapping type: {}", mapping.getClass().getName());
+		if (mapping == null) {
+			return null;
+		}
 		LowAtlasRemap remap = lowAtlasRemap;
 		if (remap == null
 				|| !(mapping instanceof TextureAtlasSprite sprite)
