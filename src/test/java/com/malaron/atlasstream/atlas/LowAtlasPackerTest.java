@@ -93,6 +93,17 @@ class LowAtlasPackerTest {
 		));
 	}
 
+	@Test
+	void keepsConduitModelSheetsAtSourceResolution() {
+		LowAtlasPacker.Layout layout = LowAtlasPacker.pack(List.of(
+			sprite("minecraft:entity/conduit/base", 512),
+			sprite("minecraft:block/stone", 256)
+		), 32, 2048);
+
+		assertEquals(1, layout.placements().get(id("minecraft:entity/conduit/base")).factor());
+		assertEquals(8, layout.placements().get(id("minecraft:block/stone")).factor());
+	}
+
 	private static LowAtlasPacker.Sprite sprite(String identifier, int size) {
 		return new LowAtlasPacker.Sprite(id(identifier), 0, 0, size, size, 0, 0);
 	}
