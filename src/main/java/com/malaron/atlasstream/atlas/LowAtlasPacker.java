@@ -116,7 +116,8 @@ public final class LowAtlasPacker {
 	}
 
 	private static int reductionFactorForSprite(Sprite sprite, int targetResolution) {
-		if (sprite.identifier().getPath().startsWith("entity/")) {
+		String path = sprite.identifier().getPath();
+		if (path.startsWith("entity/chest/") || path.startsWith("entity/shulker/")) {
 			return 1;
 		}
 		return reductionFactor(sprite.width(), sprite.height(), targetResolution);

@@ -1713,6 +1713,17 @@ public final class AtlasRuntimeState {
 	// True while a reduced rebuild is guaranteed to follow a resource reload, so Iris's full-size blocks PBR atlases
 	// would be built only to be discarded. The rebuild registers reduced maps itself.
 	public static synchronized boolean shouldSkipIrisBlockPbrLoad(TextureAtlas atlas) {
+		if (!TextureAtlas.LOCATION_BLOCKS.equals(atlas.location())) {
+			return false;
+		}
+		if (atlas instanceof VirtualAtlasFlag virtual && virtual.atlasStream$isVirtual()) {
+			AtlasStream.LOGGER.info(
+				"Skipping full Iris PBR upload for the virtual {}x{} block atlas",
+				((TextureAtlasAccessor) atlas).atlasStream$getWidth(),
+				((TextureAtlasAccessor) atlas).atlasStream$getHeight()
+			);
+			return true;
+		}
 		int targetResolution = AtlasStreamClient.getConfig().targetResolution();
 		TextureAtlasAccessor geometry = (TextureAtlasAccessor) atlas;
 		boolean preservedLayoutFits = geometry.atlasStream$getWidth() <= 16384
@@ -1727,7 +1738,6 @@ public final class AtlasRuntimeState {
 			return false;
 		}
 		return (reloadRebuildPending || (reloadBuildRunning && BUILDING.get()) || irisSwitchNeedsRebuild())
-			&& TextureAtlas.LOCATION_BLOCKS.equals(atlas.location())
 			&& SodiumTerrainIntegration.isIrisShaderPackInUse();
 	}
 

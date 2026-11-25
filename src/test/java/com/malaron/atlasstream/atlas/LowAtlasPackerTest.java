@@ -102,7 +102,7 @@ class LowAtlasPackerTest {
 		), 32, 2048);
 
 		assertEquals(1, layout.placements().get(id("minecraft:entity/chest/normal")).factor());
-		assertEquals(1, layout.placements().get(id("minecraft:entity/conduit/cage")).factor());
+		assertEquals(16, layout.placements().get(id("minecraft:entity/conduit/cage")).factor());
 		assertEquals(8, layout.placements().get(id("minecraft:block/stone")).factor());
 	}
 
