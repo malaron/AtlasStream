@@ -7,7 +7,7 @@ import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.mojang.blaze3d.vertex.PoseStack;
 
 import net.minecraft.client.model.geom.ModelPart;
-import net.minecraft.client.renderer.OrderedSubmitNodeCollector;
+import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.blockentity.ConduitRenderer;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.client.renderer.texture.UvMapping;
@@ -25,7 +25,7 @@ public abstract class ConduitRendererUvMixin {
 		)
 	)
 	private void atlasStream$remapSimplePart(
-		OrderedSubmitNodeCollector collector,
+		SubmitNodeCollector collector,
 		ModelPart part,
 		PoseStack pose,
 		RenderType renderType,
@@ -46,7 +46,7 @@ public abstract class ConduitRendererUvMixin {
 		)
 	)
 	private void atlasStream$remapTintedPart(
-		OrderedSubmitNodeCollector collector,
+		SubmitNodeCollector collector,
 		ModelPart part,
 		PoseStack pose,
 		RenderType renderType,
