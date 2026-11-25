@@ -25,10 +25,6 @@ public final class VirtualAtlasPolicy {
 		return TextureAtlas.LOCATION_BLOCKS.equals(location) && FabricLoader.getInstance().isModLoaded("sodium");
 	}
 
-	public static boolean isBlockAtlas(Identifier location) {
-		return TextureAtlas.LOCATION_BLOCKS.equals(location);
-	}
-
 	public static boolean shouldVirtualize(Identifier location, int width, int height, int maxSupportedSize) {
 		return available(location) && (width > maxSupportedSize || height > maxSupportedSize || always());
 	}

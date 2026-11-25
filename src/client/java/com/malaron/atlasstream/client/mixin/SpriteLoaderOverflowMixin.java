@@ -47,11 +47,6 @@ public abstract class SpriteLoaderOverflowMixin {
 		Executor executor,
 		CallbackInfoReturnable<SpriteLoader.Preparations> callback
 	) {
-		// AtlasStream only remaps and preserves coordinates for the block atlas. Silently shrinking chest, shulker,
-		// banner, bed, or other standalone entity atlases changes their native entity/model appearance.
-		if (!VirtualAtlasPolicy.isBlockAtlas(location)) {
-			return;
-		}
 		if (sprites.isEmpty() || atlasStream$fits(sprites, maxMipmapLevels, 1, maxSupportedTextureSize)) {
 			return;
 		}
