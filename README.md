@@ -245,7 +245,8 @@ settings and the ordered resource pack stack, including each pack's size and
 modification time. Changing a pack, its order or any mod changes the key, so a
 fresh atlas is built instead of reusing a stale one. Packs that cannot be
 fingerprinted (for example server packs) skip the cache. Entries are checksummed
-(bad ones are deleted), the least recently used are pruned beyond 3 GiB, and
+(bad ones are deleted), the least recently used are pruned to the configured
+shared disk-cache budget, and
 animation data is always rebuilt from the packs. On a cache hit the log shows
 "Loaded the reduced atlas from the disk cache".
 
@@ -267,6 +268,7 @@ On first launch the mod creates `config/atlasstream.properties`:
 highResolutionDistance=128.0
 hysteresis=16.0
 highResolutionCacheMiB=1024
+diskCacheMiB=6144
 targetResolution=64
 ```
 
@@ -275,6 +277,7 @@ targetResolution=64
 | `highResolutionDistance` | 128 blocks | Distance at which nearby textures use full resolution. The UI shows chunks; `0` disables near textures. |
 | `hysteresis` | 16 blocks | Dead band before switching back between near and far detail. |
 | `highResolutionCacheMiB` | 1024 MiB | Tile-cache limit without Iris; soft near-atlas budget with Iris. Allowed range: 64–16384 MiB. |
+| `diskCacheMiB` | 6144 MiB | Shared disk budget for reduced atlases and processed tiles. `0` disables new cache writes. Maximum: 65536 MiB. |
 | `targetResolution` | 64 | Maximum low-atlas sprite dimension: 16, 32, 64, 128 or 256. Smaller sprites are not upscaled. |
 | `debugTintLowResolution` | false | Tints low-resolution terrain magenta for comparison. |
 | `enableOnLaunch` | true | Builds and activates streamed mode automatically. Takes effect after restart. |
@@ -321,6 +324,7 @@ temporarily exceed it.
 | `/atlasstream config target-resolution <pixels>` | Set low-atlas target resolution. |
 | `/atlasstream config hysteresis <blocks>` | Set transition dead band. |
 | `/atlasstream config cache <mib>` | Set cache budget. |
+| `/atlasstream config disk-cache <mib>` | Set the shared disk-cache budget. |
 | `/atlasstream config debug-tint <true\|false>` | Toggle low-resolution tinting. |
 | `/atlasstream config enable-on-launch <true\|false>` | Toggle automatic activation. |
 | `/atlasstream vram` | Print GPU and atlas VRAM information. |

@@ -88,9 +88,12 @@ public abstract class PreparedItemVirtualTextureMixin {
 		GpuTextureView near = blockScreenEffect
 			? AtlasRuntimeState.screenEffectNearAtlasView()
 			: null;
+		GpuTextureView entityView = this.name().startsWith("entity_") && name.equals("Sampler0")
+			? AtlasRuntimeState.lowAtlasViewForFullSparseEntity(view)
+			: view;
 		GpuTextureView bound = blockScreenEffect && name.equals("Sampler0")
 			? near != null ? near : AtlasRuntimeState.lowAtlasTextureForView(view)
-			: view;
+			: entityView;
 		pass.setUniform(name, bound, sampler);
 		if (atlasStream$virtualItem && name.equals("Sampler0")) {
 			var views = AtlasRuntimeState.virtualTextureSamplingViews(atlasStream$streamTiles);

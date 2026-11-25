@@ -62,6 +62,13 @@ public final class LodConfigCommands {
 						config -> config.withTargetResolution(IntegerArgumentType.getInteger(context, "pixels")),
 						"Low-atlas sprite target updated. Rebuild/reload the atlases to apply it."
 					))))
+			.then(literal("disk-cache")
+				.then(argument("mib", LongArgumentType.longArg(0, LodConfig.MAX_DISK_CACHE_MIB))
+					.executes(context -> update(
+						context.getSource(),
+						config -> config.withDiskCacheMiB(LongArgumentType.getLong(context, "mib")),
+						"Disk cache budget updated."
+					))))
 			.then(literal("debug-tint")
 				.then(argument("enabled", BoolArgumentType.bool())
 					.executes(context -> update(
@@ -84,6 +91,7 @@ public final class LodConfigCommands {
 			"LOD config: distance=" + (config.highResolutionDistance() / LodConfig.BLOCKS_PER_CHUNK)
 				+ " chunks, hysteresis=" + config.hysteresis()
 				+ " blocks, cache=" + config.highResolutionCacheMiB()
+				+ " MiB, diskCache=" + config.diskCacheMiB()
 				+ " MiB, targetResolution=" + config.targetResolution() + "px"
 				+ ", debugTint=" + config.debugTintLowResolution()
 				+ ", enableOnLaunch=" + config.enableOnLaunch()

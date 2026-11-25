@@ -46,13 +46,14 @@ public final class IrisPbrAtlasReducer {
 		ResourceManager resourceManager,
 		List<AtlasRuntimeState.SpriteRegion> regions,
 		com.malaron.atlasstream.atlas.LowAtlasPacker.Layout layout,
-		int mipLevelCount
+		int mipLevelCount,
+		long buildGeneration
 	) throws IOException {
 		CompletableFuture<List<NativeImage>> specularFuture = CompletableFuture.supplyAsync(() -> {
 			try {
 				return buildRepackedKind(
 					resourceManager, regions, layout, mipLevelCount, "_s",
-					DEFAULT_SPECULAR, IrisPbrAtlasReducer::averageSpecular
+					DEFAULT_SPECULAR, IrisPbrAtlasReducer::averageSpecular, buildGeneration
 				);
 			} catch (IOException exception) {
 				throw new java.io.UncheckedIOException(exception);
@@ -62,7 +63,7 @@ public final class IrisPbrAtlasReducer {
 		try {
 			normal = buildRepackedKind(
 				resourceManager, regions, layout, mipLevelCount, "_n",
-				DEFAULT_NORMAL, IrisPbrAtlasReducer::averageNormal
+				DEFAULT_NORMAL, IrisPbrAtlasReducer::averageNormal, buildGeneration
 			);
 		} catch (IOException | RuntimeException | Error exception) {
 			specularFuture.whenComplete((images, failure) -> {
@@ -90,7 +91,8 @@ public final class IrisPbrAtlasReducer {
 		int mipLevelCount,
 		String suffix,
 		int defaultPixel,
-		PixelAverager averager
+		PixelAverager averager,
+		long buildGeneration
 	) throws IOException {
 		List<NativeImage> images = new ArrayList<>(mipLevelCount);
 		NativeImage atlas = new NativeImage(layout.width(), layout.height(), true);
@@ -98,6 +100,7 @@ public final class IrisPbrAtlasReducer {
 		atlas.fillRect(0, 0, layout.width(), layout.height(), defaultPixel);
 		try {
 			regions.parallelStream().forEach(region -> {
+				AtlasRuntimeState.checkBuildCurrent(buildGeneration);
 				com.malaron.atlasstream.atlas.LowAtlasPacker.Placement placement =
 					layout.placements().get(region.identifier());
 				Identifier id = Identifier.fromNamespaceAndPath(
@@ -144,6 +147,7 @@ public final class IrisPbrAtlasReducer {
 				})
 				.toList();
 			for (int level = 1; level < mipLevelCount; level++) {
+				AtlasRuntimeState.checkBuildCurrent(buildGeneration);
 				images.add(AtlasRuntimeState.createMipLevel(images.get(level - 1), destinations, level, averager));
 			}
 			return images;
