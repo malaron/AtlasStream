@@ -100,6 +100,7 @@ public final class AtlasRuntimeState {
 	private static volatile boolean lowAtlasOriginalLayout;
 	private static volatile boolean screenEffectUsesNearAtlas;
 	private static final AtomicBoolean SCREEN_OVERLAY_REMAP_LOGGED = new AtomicBoolean();
+	private static final Set<String> CONDUIT_REMAP_LOGGED = new HashSet<>();
 	private static volatile VirtualTextureGpuPageTable virtualTextureGpuPageTable;
 	private static volatile VirtualTextureTileBuilder virtualTextureTileBuilder;
 	private static volatile VirtualTextureGpuCache virtualTextureGpuCache;
@@ -598,13 +599,18 @@ public final class AtlasRuntimeState {
 		return !lowAtlasOriginalLayout && view != null && view == lowResolutionTextureView;
 	}
 
+	public static GpuTextureView lowAtlasViewForFullSparseEntity(GpuTextureView view) {
+		NearAtlas near = nearAtlas;
+		if (near != null && near.isUsable() && view == near.albedoView()) {
+			return lowResolutionTextureView;
+		}
+		return view;
+	}
+
 	public static net.minecraft.client.renderer.texture.UvMapping remapEntityBlockUv(
 		net.minecraft.client.renderer.texture.UvMapping mapping
 	) {
-		NearAtlas near = nearAtlas;
-		if (near != null && near.isUsable() && near.isCompact()) {
-			return mapping;
-		}
+		AtlasStream.LOGGER.info("Conduit UV mapping type: {}", mapping.getClass().getName());
 		LowAtlasRemap remap = lowAtlasRemap;
 		if (remap == null
 				|| !(mapping instanceof TextureAtlasSprite sprite)
@@ -614,6 +620,18 @@ public final class AtlasRuntimeState {
 		}
 		float[] start = remap.map(sprite.getU(0), sprite.getV(0));
 		float[] end = remap.map(sprite.getU(1), sprite.getV(1), true);
+		Identifier name = sprite.contents().name();
+		if (name.getPath().startsWith("entity/conduit/")
+				&& CONDUIT_REMAP_LOGGED.size() < 12
+				&& CONDUIT_REMAP_LOGGED.add(name.toString())) {
+			AtlasStream.LOGGER.info(
+				"Conduit low remap: sprite={}, source=({},{})-({},{ }), mapped=({},{})-({},{ }), placement={}",
+				name,
+				sprite.getU(0), sprite.getV(0), sprite.getU(1), sprite.getV(1),
+				start[0], start[1], end[0], end[1],
+				remap.placementAt(sprite.getU(0), sprite.getV(0))
+			);
+		}
 		return new RemappedUvMapping(start[0], start[1], end[0], end[1]);
 	}
 
