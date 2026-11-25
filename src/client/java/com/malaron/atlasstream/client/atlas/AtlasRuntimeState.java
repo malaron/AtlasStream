@@ -745,6 +745,9 @@ public final class AtlasRuntimeState {
 	}
 
 	public static synchronized void recordSpriteUsage(net.minecraft.client.renderer.texture.TextureAtlasSprite sprite) {
+		if (!isTerrainNearSprite(sprite.atlasLocation(), sprite.contents().name())) {
+			return;
+		}
 		NearAtlas near = nearAtlas;
 		if (near != null && !guiItemDraw && TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
 			near.touch(sprite);
@@ -902,6 +905,9 @@ public final class AtlasRuntimeState {
 	}
 
 	public static void recordChunkSpriteUsage(net.minecraft.client.renderer.texture.TextureAtlasSprite sprite) {
+		if (!isTerrainNearSprite(sprite.atlasLocation(), sprite.contents().name())) {
+			return;
+		}
 		NearAtlas near = nearAtlas;
 		long sectionKey = SodiumChunkMeshPriority.currentSectionKey();
 		// Kept in every mode so the streamed preview knows each section's sprites after shaders are switched off,
@@ -931,6 +937,11 @@ public final class AtlasRuntimeState {
 			generation,
 			SodiumChunkMeshPriority.distanceSquared()
 		);
+	}
+
+	static boolean isTerrainNearSprite(Identifier atlasLocation, Identifier spriteName) {
+		return TextureAtlas.LOCATION_BLOCKS.equals(atlasLocation)
+			&& !spriteName.getPath().startsWith("entity/");
 	}
 
 	private static final double SECTION_RADIUS = 14.0;
