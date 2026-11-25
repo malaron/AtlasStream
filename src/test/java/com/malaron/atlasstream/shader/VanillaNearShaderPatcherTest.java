@@ -36,8 +36,9 @@ class VanillaNearShaderPatcherTest {
 	}
 
 	@Test
-	void doesNotPatchUvOnlyChestAndEntityShaders() {
+	void patchesUvOnlyBlockAtlasShaders() {
 		String source = "in vec2 iris_UV0;\nvec2 p = iris_UV0;";
-		assertEquals(source, VanillaNearShaderPatcher.patchReferences(source));
+		assertEquals("in vec2 iris_UV0;\nvec2 p = atlasStreamAtlasRemap(iris_UV0);",
+			VanillaNearShaderPatcher.patchReferences(source));
 	}
 }
