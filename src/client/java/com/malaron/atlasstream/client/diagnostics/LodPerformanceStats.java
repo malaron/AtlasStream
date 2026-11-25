@@ -2,6 +2,7 @@ package com.malaron.atlasstream.client.diagnostics;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -32,6 +33,16 @@ public final class LodPerformanceStats {
 	private static long nearUploadNanos;
 	private static long nearUploadCalls;
 	private static long nearUploadPeakNanos;
+	private static long irisSamplerRefreshNanos;
+	private static long irisSamplerRefreshCalls;
+	private static long irisSamplerRefreshPeakNanos;
+	private static long filterCacheHits;
+	private static long filterCacheMisses;
+	private static long batchClearNanos;
+	private static long batchClearCalls;
+	private static long batchClearRegions;
+	private static long nearBudgetRejections;
+	private static final List<Long> FRAME_NANOS = new ArrayList<>();
 
 	static {
 		for (SectionLod lod : SectionLod.values()) {
@@ -65,6 +76,16 @@ public final class LodPerformanceStats {
 		nearUploadNanos = 0;
 		nearUploadCalls = 0;
 		nearUploadPeakNanos = 0;
+		irisSamplerRefreshNanos = 0;
+		irisSamplerRefreshCalls = 0;
+		irisSamplerRefreshPeakNanos = 0;
+		filterCacheHits = 0;
+		filterCacheMisses = 0;
+		batchClearNanos = 0;
+		batchClearCalls = 0;
+		batchClearRegions = 0;
+		nearBudgetRejections = 0;
+		FRAME_NANOS.clear();
 		sampleStartNanos = System.nanoTime();
 		recording = true;
 	}
@@ -171,6 +192,46 @@ public final class LodPerformanceStats {
 		}
 	}
 
+	public static synchronized void recordIrisSamplerRefresh(long elapsedNanos) {
+		if (recording) {
+			irisSamplerRefreshNanos += elapsedNanos;
+			irisSamplerRefreshCalls++;
+			irisSamplerRefreshPeakNanos = Math.max(irisSamplerRefreshPeakNanos, elapsedNanos);
+		}
+	}
+
+	public static synchronized void recordFilterCacheHit() {
+		if (recording) {
+			filterCacheHits++;
+		}
+	}
+
+	public static synchronized void recordFilterCacheMiss() {
+		if (recording) {
+			filterCacheMisses++;
+		}
+	}
+
+	public static synchronized void recordBatchClear(long elapsedNanos, int regionCount) {
+		if (recording) {
+			batchClearNanos += elapsedNanos;
+			batchClearCalls++;
+			batchClearRegions += regionCount;
+		}
+	}
+
+	public static synchronized void recordFrame(long elapsedNanos) {
+		if (recording) {
+			FRAME_NANOS.add(elapsedNanos);
+		}
+	}
+
+	public static synchronized void recordNearBudgetRejection() {
+		if (recording) {
+			nearBudgetRejections++;
+		}
+	}
+
 	public static synchronized List<String> stopAndFormat() {
 		if (!recording) {
 			return List.of();
@@ -184,6 +245,12 @@ public final class LodPerformanceStats {
 			"Filter both LOD lists: %.1f ms/%d scans (included in prepare timing where run)",
 			toMilliseconds(filterNanos),
 			filterCalls
+		));
+		lines.add(String.format(
+			Locale.ROOT,
+			"Filtered-list cache: %d hits, %d misses",
+			filterCacheHits,
+			filterCacheMisses
 		));
 		for (SectionLod lod : SectionLod.values()) {
 			Metrics metrics = METRICS.get(lod);
@@ -229,8 +296,52 @@ public final class LodPerformanceStats {
 			toMilliseconds(nearPrepareNanos), nearPrepareCalls, toMilliseconds(nearPreparePeakNanos),
 			toMilliseconds(nearUploadNanos), nearUploadCalls, toMilliseconds(nearUploadPeakNanos)
 		));
+		lines.add(String.format(
+			Locale.ROOT,
+			"Iris sampler refresh: %.1f ms/%d calls, peak %.1f ms",
+			toMilliseconds(irisSamplerRefreshNanos),
+			irisSamplerRefreshCalls,
+			toMilliseconds(irisSamplerRefreshPeakNanos)
+		));
+		lines.add(String.format(
+			Locale.ROOT,
+			"Sodium batch invalidation: %.1f ms/%d calls across %d region clears",
+			toMilliseconds(batchClearNanos),
+			batchClearCalls,
+			batchClearRegions
+		));
+		lines.add(String.format(
+			Locale.ROOT,
+			"Near-atlas budget admission: %d sprite jobs blocked and left on low-res fallback",
+			nearBudgetRejections
+		));
+		appendFrameTiming(lines, seconds);
 		lines.add("Render-thread timings can include driver waits; they exclude GPU execution and other world-render work.");
 		return List.copyOf(lines);
+	}
+
+	private static void appendFrameTiming(List<String> lines, double elapsedSeconds) {
+		if (FRAME_NANOS.isEmpty()) {
+			lines.add("Frame timing: no frames captured");
+			return;
+		}
+		FRAME_NANOS.sort(Comparator.naturalOrder());
+		long totalNanos = 0;
+		for (long frameNanos : FRAME_NANOS) {
+			totalNanos += frameNanos;
+		}
+		int p95Index = Math.min(FRAME_NANOS.size() - 1, (int) Math.ceil(FRAME_NANOS.size() * 0.95) - 1);
+		double averageMillis = toMilliseconds(totalNanos) / FRAME_NANOS.size();
+		lines.add(String.format(
+			Locale.ROOT,
+			"Frame timing: %.1f FPS, avg %.2f ms, p95 %.2f ms, max %.2f ms across %d frames (%.1f s sample)",
+			FRAME_NANOS.size() / Math.max(elapsedSeconds, 0.001),
+			averageMillis,
+			toMilliseconds(FRAME_NANOS.get(p95Index)),
+			toMilliseconds(FRAME_NANOS.getLast()),
+			FRAME_NANOS.size(),
+			elapsedSeconds
+		));
 	}
 
 	private static double toMilliseconds(long nanos) {

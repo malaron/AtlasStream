@@ -413,6 +413,8 @@ public final class SodiumTerrainIntegration {
 		if (!isIrisShaderPackInUse()) {
 			return;
 		}
+		boolean recording = LodPerformanceStats.isRecording();
+		long start = recording ? System.nanoTime() : 0;
 		try {
 			Field activeSamplersField = irisActiveProgramSamplersField;
 			Method updateSamplers = irisProgramSamplersUpdateMethod;
@@ -450,6 +452,10 @@ public final class SodiumTerrainIntegration {
 					"Could not refresh Iris terrain PBR samplers for section LOD selection",
 					exception
 				);
+			}
+		} finally {
+			if (recording) {
+				LodPerformanceStats.recordIrisSamplerRefresh(System.nanoTime() - start);
 			}
 		}
 	}
@@ -597,6 +603,9 @@ public final class SodiumTerrainIntegration {
 				FilteredListsByLod filteredLists = filteredListsByTranslucency.get(translucent);
 				if (filteredLists == null) {
 					boolean recording = LodPerformanceStats.isRecording();
+					if (recording) {
+						LodPerformanceStats.recordFilterCacheMiss();
+					}
 					long filterStart = recording ? System.nanoTime() : 0;
 					filteredLists = createFilteredListsByLod(
 						source,
@@ -611,6 +620,8 @@ public final class SodiumTerrainIntegration {
 							filteredLists.lowSectionCount()
 						);
 					}
+				} else if (LodPerformanceStats.isRecording()) {
+					LodPerformanceStats.recordFilterCacheHit();
 				}
 				return filteredLists.renderLists(selectedLod).iterator();
 			};
@@ -685,6 +696,9 @@ public final class SodiumTerrainIntegration {
 	}
 
 	private static void clearCachedBatches(Object renderLists, Object terrainRenderPass) {
+		boolean recording = LodPerformanceStats.isRecording();
+		long start = recording ? System.nanoTime() : 0;
+		int regionCount = 0;
 		Set<Object> regions = Collections.newSetFromMap(new IdentityHashMap<>());
 		for (boolean translucent : new boolean[] { false, true }) {
 			Object iterator = invoke(
@@ -697,6 +711,7 @@ public final class SodiumTerrainIntegration {
 				Object renderList = invoke(iterator, "next", new Class<?>[0]);
 				Object region = invoke(renderList, "getRegion", new Class<?>[0]);
 				if (regions.add(region)) {
+					regionCount++;
 					invoke(
 						region,
 						"clearCachedBatchFor",
@@ -705,6 +720,9 @@ public final class SodiumTerrainIntegration {
 					);
 				}
 			}
+		}
+		if (recording) {
+			LodPerformanceStats.recordBatchClear(System.nanoTime() - start, regionCount);
 		}
 	}
 

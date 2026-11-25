@@ -565,6 +565,12 @@ public final class LodCommands {
 		for (String line : lines) {
 			source.sendFeedback(Component.literal(line));
 		}
+		NearAtlas near = AtlasRuntimeState.activeNearAtlas();
+		if (near != null) {
+			for (String line : near.debugLines()) {
+				source.sendFeedback(Component.literal(line));
+			}
+		}
 	}
 
 	private static int buildAtlases(

@@ -130,6 +130,7 @@ public final class NearAtlas implements AutoCloseable {
 	);
 	private final Set<TextureAtlasSprite> requested = ConcurrentHashMap.newKeySet();
 	private final java.util.Map<Long, Set<TextureAtlasSprite>> sectionSprites = new ConcurrentHashMap<>();
+	private final java.util.Map<TextureAtlasSprite, Long> waitingByteRequirements = new java.util.HashMap<>();
 	private final java.util.Map<TextureAtlasSprite, Long> lastTouched = new ConcurrentHashMap<>();
 	private final java.util.Map<TextureAtlasSprite, Long> lastNeeded = new java.util.HashMap<>();
 	private final java.util.Map<TextureAtlasSprite, long[]> pagesBySprite = new java.util.HashMap<>();
@@ -735,6 +736,7 @@ public final class NearAtlas implements AutoCloseable {
 				return false;
 			}
 			requested.remove(sprite);
+			waitingByteRequirements.remove(sprite);
 			return true;
 		});
 		for (TextureAtlasSprite sprite : needed) {
@@ -769,16 +771,22 @@ public final class NearAtlas implements AutoCloseable {
 		}
 		evictUnneeded(needed, config, radius <= 0.0, now);
 		// Simulate reservations so each retry has enough free space before it is queued.
+		long budget = config.highResolutionCacheMiB() * 1024L * 1024L;
 		if (!waitingForSlot.isEmpty() && !freeSlots.isEmpty()) {
 			List<TextureAtlasSprite> waiting = new ArrayList<>(waitingForSlot);
 			waiting.sort(this::comparePriority);
 			CompactFreeSlots free = freeSlots.copy();
 			reserveRetries(free);
 			for (TextureAtlasSprite sprite : waiting) {
+				Long requiredBytes = waitingByteRequirements.get(sprite);
+				if (requiredBytes != null && committedBytes() + requiredBytes > budget) {
+					continue;
+				}
 				long key = slotKey(sprite);
 				if (allocateFrom(free, key)) {
 					retryIncoming.add(sprite);
 					waitingForSlot.remove(sprite);
+					waitingByteRequirements.remove(sprite);
 				}
 			}
 			retries = new ArrayList<>(retryIncoming);
@@ -852,6 +860,7 @@ public final class NearAtlas implements AutoCloseable {
 		try {
 			CompactFreeSlots free = freeSlots.copy();
 			reserveRetries(free);
+			Set<Long> releasedPages = new java.util.HashSet<>();
 			int evictions = 0;
 			for (TextureAtlasSprite sprite : waiting) {
 				if (evictions >= MAX_PRESSURE_EVICTIONS_PER_REFRESH || System.nanoTime() >= deadline) {
@@ -881,7 +890,7 @@ public final class NearAtlas implements AutoCloseable {
 				Geometry geometry = resident.get(victim);
 				free.release(geometry.x, geometry.y, geometry.slotW, geometry.slotH);
 				allocateFrom(free, key);
-				evict(victim);
+				evict(victim, releasedPages);
 				if (needed.contains(victim)) {
 					// Still wanted, but farther than the sprite taking its slot: queue it behind nearer ones
 					// instead of letting the next refresh re-request it and win the slot back.
@@ -890,6 +899,7 @@ public final class NearAtlas implements AutoCloseable {
 				}
 				evictions++;
 			}
+			uncommitReleased(releasedPages);
 			checkGl("releasing sparse pages");
 		} catch (IllegalStateException exception) {
 			AtlasStream.LOGGER.error("Could not release near sprites", exception);
@@ -913,20 +923,29 @@ public final class NearAtlas implements AutoCloseable {
 		}
 		long target = off ? 0L : budget / 10 * 9;
 		List<TextureAtlasSprite> victims = new ArrayList<>();
+		boolean cacheOverBudget = committed > budget;
 		for (TextureAtlasSprite sprite : resident.keySet()) {
-			if (!needed.contains(sprite) && now - lastNeeded.getOrDefault(sprite, now) >= EVICT_GRACE_NANOS) {
+			if ((!needed.contains(sprite) && now - lastNeeded.getOrDefault(sprite, now) >= EVICT_GRACE_NANOS)
+					|| cacheOverBudget) {
 				victims.add(sprite);
 			}
 		}
 		if (victims.isEmpty()) {
 			return;
 		}
-		victims.sort(java.util.Comparator.comparingLong(sprite -> lastNeeded.getOrDefault(sprite, now)));
+		victims.sort((first, second) -> {
+			boolean firstUnneeded = !needed.contains(first);
+			boolean secondUnneeded = !needed.contains(second);
+			if (firstUnneeded != secondUnneeded) {
+				return firstUnneeded ? -1 : 1;
+			}
+			return comparePriority(second, first);
+		});
 		int previousBinding = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
 		long deadline = System.nanoTime() + EVICT_BUDGET_NANOS;
 		try {
 			for (int i = 0; i < victims.size() && i < MAX_EVICTIONS_PER_REFRESH && (off || committedBytes() > target); i++) {
-				evict(victims.get(i));
+				evict(victims.get(i), null);
 				if (System.nanoTime() >= deadline) {
 					break;
 				}
@@ -940,7 +959,7 @@ public final class NearAtlas implements AutoCloseable {
 		}
 	}
 
-	private void evict(TextureAtlasSprite sprite) {
+	private void evict(TextureAtlasSprite sprite, Set<Long> releasedPages) {
 		long[] pages = pagesBySprite.remove(sprite);
 		Geometry evicted = resident.remove(sprite);
 		if (compact && evicted != null) {
@@ -965,11 +984,28 @@ public final class NearAtlas implements AutoCloseable {
 			return;
 		}
 		long[] unreferenced = SparsePageRuns.releaseReferences(pageRefs, pages);
-		if (unreferenced.length > 0) {
+		if (unreferenced.length == 0) {
+			return;
+		}
+		if (releasedPages != null) {
+			for (long key : unreferenced) {
+				releasedPages.add(key);
+			}
+		} else {
 			uncommit(albedo, unreferenced);
 			uncommit(normal, unreferenced);
 			uncommit(specular, unreferenced);
 		}
+	}
+
+	private void uncommitReleased(Set<Long> releasedPages) {
+		if (releasedPages.isEmpty()) {
+			return;
+		}
+		long[] pages = releasedPages.stream().mapToLong(Long::longValue).toArray();
+		uncommit(albedo, pages);
+		uncommit(normal, pages);
+		uncommit(specular, pages);
 	}
 
 	private void uncommit(Layer layer, long[] keys) {
@@ -1204,7 +1240,7 @@ public final class NearAtlas implements AutoCloseable {
 		return blended;
 	}
 
-	List<String> debugLines() {
+	public List<String> debugLines() {
 		long bytes = committedBytes();
 		return List.of(
 			"Near sparse atlas" + (isHybrid() ? " (experimental hybrid)" : "") + ": "
@@ -1409,6 +1445,17 @@ public final class NearAtlas implements AutoCloseable {
 			}
 			return;
 		}
+		if (compact) {
+			long[] keys = pageKeys(geometry);
+			long additionalBytes = additionalCommitBytes(keys);
+			long budget = AtlasStreamClient.getConfig().highResolutionCacheMiB() * 1024L * 1024L;
+			if (committedBytes() + additionalBytes > budget) {
+				freeSlot(geometry);
+				waitingForSlot.add(sprite);
+				waitingByteRequirements.put(sprite, additionalBytes);
+				return;
+			}
+		}
 		try {
 			List<LevelData> albedoLevels = albedoLevels(sprite, geometry, 0);
 			Future<List<List<LevelData>>> pbr = executor.submit(() -> List.of(
@@ -1426,19 +1473,30 @@ public final class NearAtlas implements AutoCloseable {
 	private void finishJob(Job job) {
 		try {
 			List<List<LevelData>> pbr = job.pbr.get();
+			long[] pageKeys = pageKeys(job.albedo);
+			long budget = AtlasStreamClient.getConfig().highResolutionCacheMiB() * 1024L * 1024L;
+			long additionalBytes = additionalCommitBytes(pageKeys);
+			if (compact && committedBytes() + additionalBytes > budget) {
+				freeSlot(job.geometry);
+				waitingForSlot.add(job.sprite);
+				waitingByteRequirements.put(job.sprite, additionalBytes);
+				LodPerformanceStats.recordNearBudgetRejection();
+				return;
+			}
 			write(albedo, job.albedo);
 			write(normal, pbr.get(0));
 			write(specular, pbr.get(1));
 			if (compact) {
 				writeRemap(job.geometry, true);
 			}
-			pagesBySprite.put(job.sprite, pageKeys(job.albedo));
+			pagesBySprite.put(job.sprite, pageKeys);
 			for (long key : pagesBySprite.get(job.sprite)) {
 				pageRefs.merge(key, 1, Integer::sum);
 			}
 			lastNeeded.put(job.sprite, System.nanoTime());
 			residentSprites++;
 			resident.put(job.sprite, job.geometry);
+			waitingByteRequirements.remove(job.sprite);
 			RESIDENCY_REVISION.incrementAndGet();
 		} catch (java.util.concurrent.ExecutionException | InterruptedException | RuntimeException exception) {
 			freeSlot(job.geometry);
@@ -1448,6 +1506,30 @@ public final class NearAtlas implements AutoCloseable {
 				failed = true;
 			}
 		}
+	}
+
+	private long additionalCommitBytes(long[] keys) {
+		return additionalCommitBytes(albedo, keys)
+			+ additionalCommitBytes(normal, keys)
+			+ additionalCommitBytes(specular, keys);
+	}
+
+	private long additionalCommitBytes(Layer layer, long[] keys) {
+		long bytes = 0;
+		for (long key : keys) {
+			if (layer.committedPages.contains(key)) {
+				continue;
+			}
+			int level = (int) (key >>> 48);
+			int pageX = (int) ((key >>> 24) & 0xFFFFFFL);
+			int pageY = (int) (key & 0xFFFFFFL);
+			int levelWidth = Math.max(1, width >> level);
+			int levelHeight = Math.max(1, height >> level);
+			int commitWidth = Math.min(PAGE, levelWidth - pageX * PAGE);
+			int commitHeight = Math.min(PAGE, levelHeight - pageY * PAGE);
+			bytes += Math.multiplyExact((long) commitWidth * commitHeight, 4L);
+		}
+		return bytes;
 	}
 
 	private Geometry geometry(TextureAtlasSprite sprite) {
@@ -1486,6 +1568,26 @@ public final class NearAtlas implements AutoCloseable {
 			return null;
 		}
 		return new Geometry(slot[0], slot[1], w, h, padX, padY, sprite.getX(), sprite.getY(), slotW, slotH);
+	}
+
+	private long[] pageKeys(Geometry geometry) {
+		Set<Long> keys = new java.util.HashSet<>();
+		for (int level = 0; level < mipLevels; level++) {
+			int x = geometry.x >> level;
+			int y = geometry.y >> level;
+			int width = Math.max(1, (geometry.width + 2 * geometry.padX) >> level);
+			int height = Math.max(1, (geometry.height + 2 * geometry.padY) >> level);
+			int levelWidth = Math.max(1, this.width >> level);
+			int levelHeight = Math.max(1, this.height >> level);
+			int lastPageX = Math.min(levelWidth - 1, x + width - 1) / PAGE;
+			int lastPageY = Math.min(levelHeight - 1, y + height - 1) / PAGE;
+			for (int pageY = y / PAGE; pageY <= lastPageY; pageY++) {
+				for (int pageX = x / PAGE; pageX <= lastPageX; pageX++) {
+					keys.add(((long) level << 48) | ((long) pageX << 24) | pageY);
+				}
+			}
+		}
+		return keys.stream().mapToLong(Long::longValue).toArray();
 	}
 
 	private List<LevelData> albedoLevels(TextureAtlasSprite sprite, Geometry geometry, int frameIndex) {

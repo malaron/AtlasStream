@@ -18,6 +18,7 @@
 		"IrisPbrAtlasLookupMixin",
 		"ItemFrameSpriteUsageMixin",
 		"MinecartBlockSpriteUsageMixin",
+		"MinecraftFrameTimingMixin",
 		"PipelineCacheMixin",
 		"PreparedItemVirtualTextureMixin",
 		"ScreenEffectAtlasRemapMixin",
