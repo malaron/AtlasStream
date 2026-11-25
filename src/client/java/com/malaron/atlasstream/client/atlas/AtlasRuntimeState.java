@@ -100,8 +100,6 @@ public final class AtlasRuntimeState {
 	private static volatile boolean lowAtlasOriginalLayout;
 	private static volatile boolean screenEffectUsesNearAtlas;
 	private static final AtomicBoolean SCREEN_OVERLAY_REMAP_LOGGED = new AtomicBoolean();
-	private static final Set<String> ENTITY_ATLAS_BINDINGS_LOGGED = new HashSet<>();
-	private static final Set<String> ENTITY_QUADS_LOGGED = new HashSet<>();
 	private static volatile VirtualTextureGpuPageTable virtualTextureGpuPageTable;
 	private static volatile VirtualTextureTileBuilder virtualTextureTileBuilder;
 	private static volatile VirtualTextureGpuCache virtualTextureGpuCache;
@@ -600,56 +598,6 @@ public final class AtlasRuntimeState {
 		return !lowAtlasOriginalLayout && view != null && view == lowResolutionTextureView;
 	}
 
-	public static void logEntityAtlasBinding(String renderType, GpuTextureView view) {
-		if (view == null) {
-			return;
-		}
-		String key = renderType + ":" + System.identityHashCode(view);
-		if (ENTITY_ATLAS_BINDINGS_LOGGED.size() >= 24 || !ENTITY_ATLAS_BINDINGS_LOGGED.add(key)) {
-			return;
-		}
-		AtlasStream.LOGGER.info(
-			"Entity atlas binding: renderType={}, view={}, texture={}",
-			renderType,
-			System.identityHashCode(view),
-			textureViewSummary(view)
-		);
-	}
-
-	private static String textureViewSummary(GpuTextureView view) {
-		try {
-			GpuTexture texture = null;
-			for (java.lang.reflect.Method method : view.getClass().getMethods()) {
-				if (method.getParameterCount() == 0
-						&& method.getReturnType().getSimpleName().equals("GpuTexture")) {
-					texture = (GpuTexture) method.invoke(view);
-					break;
-				}
-			}
-			if (texture == null) {
-				Class<?> type = view.getClass();
-				while (texture == null && type != null) {
-					for (java.lang.reflect.Field field : type.getDeclaredFields()) {
-						if (GpuTexture.class.isAssignableFrom(field.getType())) {
-							field.setAccessible(true);
-							texture = (GpuTexture) field.get(view);
-							break;
-						}
-					}
-					type = type.getSuperclass();
-				}
-			}
-			if (texture == null) {
-				return "missing";
-			}
-			int glId = (Integer) texture.getClass().getMethod("iris$getGlId").invoke(texture);
-			return glId + "@" + texture.getWidth(0) + "x" + texture.getHeight(0)
-				+ ":" + texture.getMipLevels();
-		} catch (ReflectiveOperationException | RuntimeException exception) {
-			return "unresolved:" + exception.getClass().getSimpleName();
-		}
-	}
-
 	public static boolean isLowAtlasOriginalLayout() {
 		return lowAtlasOriginalLayout;
 	}
@@ -747,12 +695,7 @@ public final class AtlasRuntimeState {
 	}
 
 	private static boolean slotUsesNearAtlas(NearAtlas near, Object atlas) {
-		// A full-layout sparse atlas has original UVs but only committed pages; switching every
-		// non-terrain draw to it before a sprite is resident produces invisible entity parts.
-		// Compact hybrid mode embeds the low fallback, so it is safe for global slot substitution.
-		return near.isCompact()
-			&& near.isHybrid()
-			&& vanillaRemapAvailable
+		return (!near.isCompact() || vanillaRemapAvailable)
 			&& !guiItemDraw
 			&& atlas == previewedAtlas
 			&& near.isUsable()
@@ -806,7 +749,6 @@ public final class AtlasRuntimeState {
 		if (near != null && !guiItemDraw && TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
 			near.touch(sprite);
 		}
-
 		if (!TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation()) || !useVirtualTextureForItemDraw()
 				|| SodiumTerrainIntegration.isIrisShaderPackInUse()) {
 			return;
@@ -830,27 +772,6 @@ public final class AtlasRuntimeState {
 		itemSpriteRequests.put(sprite, now);
 		VIRTUAL_TEXTURE_REQUEST_TRACKER.recordSpriteUsage(
 			sprite.getU0(), sprite.getV0(), sprite.getU1(), sprite.getV1(), generation, 0.0
-		);
-	}
-
-	public static void logEntityQuad(net.minecraft.client.renderer.texture.TextureAtlasSprite sprite) {
-		Identifier name = sprite.contents().name();
-		String key = sprite.atlasLocation() + ":" + name;
-		if (ENTITY_QUADS_LOGGED.size() >= 128 || !ENTITY_QUADS_LOGGED.add(key)) {
-			return;
-		}
-		NearAtlas near = nearAtlas;
-		AtlasStream.LOGGER.info(
-			"Entity quad: atlas={}, sprite={}, uv=({},{})-({},{ }), source={}x{}, resident={}",
-			sprite.atlasLocation(),
-			name,
-			sprite.getU0(),
-			sprite.getV0(),
-			sprite.getU1(),
-			sprite.getV1(),
-			sprite.contents().width(),
-			sprite.contents().height(),
-			near != null && near.isResident(sprite)
 		);
 	}
 
@@ -981,9 +902,6 @@ public final class AtlasRuntimeState {
 	}
 
 	public static void recordChunkSpriteUsage(net.minecraft.client.renderer.texture.TextureAtlasSprite sprite) {
-		if (!isTerrainNearSprite(sprite.atlasLocation(), sprite.contents().name())) {
-			return;
-		}
 		NearAtlas near = nearAtlas;
 		long sectionKey = SodiumChunkMeshPriority.currentSectionKey();
 		// Kept in every mode so the streamed preview knows each section's sprites after shaders are switched off,
@@ -1013,11 +931,6 @@ public final class AtlasRuntimeState {
 			generation,
 			SodiumChunkMeshPriority.distanceSquared()
 		);
-	}
-
-	static boolean isTerrainNearSprite(Identifier atlasLocation, Identifier spriteName) {
-		return TextureAtlas.LOCATION_BLOCKS.equals(atlasLocation)
-			&& !spriteName.getPath().startsWith("entity/");
 	}
 
 	private static final double SECTION_RADIUS = 14.0;
@@ -1687,12 +1600,6 @@ public final class AtlasRuntimeState {
 	}
 
 	private static synchronized void retainLowAtlasFallback() {
-		// Original-layout and sparse-near paths do not own a copyable low-resolution texture. The live source atlas
-		// remains valid until vanilla swaps it during reload, so there is no fallback copy to retain.
-		if (!atlasOwnsLowResolutionTexture) {
-			closeReloadFallback();
-			return;
-		}
 		GpuTexture source = lowResolutionTexture;
 		GpuTexture remapSource = lowAtlasRemapTexture;
 		closeReloadFallback();
@@ -1789,17 +1696,6 @@ public final class AtlasRuntimeState {
 	// True while a reduced rebuild is guaranteed to follow a resource reload, so Iris's full-size blocks PBR atlases
 	// would be built only to be discarded. The rebuild registers reduced maps itself.
 	public static synchronized boolean shouldSkipIrisBlockPbrLoad(TextureAtlas atlas) {
-		if (!TextureAtlas.LOCATION_BLOCKS.equals(atlas.location())) {
-			return false;
-		}
-		if (atlas instanceof VirtualAtlasFlag virtual && virtual.atlasStream$isVirtual()) {
-			AtlasStream.LOGGER.info(
-				"Skipping full Iris PBR upload for the virtual {}x{} block atlas",
-				((TextureAtlasAccessor) atlas).atlasStream$getWidth(),
-				((TextureAtlasAccessor) atlas).atlasStream$getHeight()
-			);
-			return true;
-		}
 		int targetResolution = AtlasStreamClient.getConfig().targetResolution();
 		TextureAtlasAccessor geometry = (TextureAtlasAccessor) atlas;
 		boolean preservedLayoutFits = geometry.atlasStream$getWidth() <= 16384
@@ -1814,6 +1710,7 @@ public final class AtlasRuntimeState {
 			return false;
 		}
 		return (reloadRebuildPending || (reloadBuildRunning && BUILDING.get()) || irisSwitchNeedsRebuild())
+			&& TextureAtlas.LOCATION_BLOCKS.equals(atlas.location())
 			&& SodiumTerrainIntegration.isIrisShaderPackInUse();
 	}
 
@@ -3016,6 +2913,8 @@ public final class AtlasRuntimeState {
 				.orElse(0);
 			replaceLowAtlasRemap(remapTexture, remapView);
 			closeReloadFallback();
+			animatedSprites = image.transferAnimatedSprites();
+			animatedStateMismatchLogged = false;
 			if (releaseHighResolutionAtlas) {
 				Object pbrHolder = image.isOriginalLayout()
 					? IrisPbrAtlasReducer.holder(highResolutionTexture)
@@ -3030,7 +2929,9 @@ public final class AtlasRuntimeState {
 						net.minecraft.client.Minecraft.getInstance().getResourceManager()
 					);
 					if (created != null && created.isCompact() && NearAtlas.hybridRequested()) {
-						created.initializeRepackedHybrid(image.mipLevels(), image.pbrImages());
+						AtlasStream.LOGGER.info(
+							"Repacked low atlas uses compact near-atlas streaming instead of the layout-based hybrid fallback"
+						);
 					}
 					if (nearAtlas != null) {
 						nearAtlas.close();
@@ -3065,8 +2966,6 @@ public final class AtlasRuntimeState {
 					replaceBlockAtlasWithLowResolution(atlas, highResolutionTexture, texture, textureView);
 				}
 			}
-			animatedSprites = image.transferAnimatedSprites();
-			animatedStateMismatchLogged = false;
 			initialized = true;
 		} finally {
 			if (!initialized) {

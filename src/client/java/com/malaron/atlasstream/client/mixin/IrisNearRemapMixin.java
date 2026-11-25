@@ -44,15 +44,6 @@ vec2 atlasStreamNearRemap(vec2 uv, vec2 anchor) {
     if (entry.a < 0.5) {
         float fallbackFactor = floor(header1.g * 255.0 + 0.5);
         if (fallbackFactor > 0.0) {
-            ivec2 lowRemapSize = textureSize(u_AtlasStreamLowRemap, 0);
-            if (lowRemapSize.x > 3) {
-                vec4 lowHeader = texelFetch(u_AtlasStreamLowRemap, ivec2(0, lowRemapSize.y - 1), 0);
-                vec2 lowSize = vec2(
-                    floor(lowHeader.r * 255.0 + 0.5) + floor(lowHeader.g * 255.0 + 0.5) * 256.0,
-                    floor(lowHeader.b * 255.0 + 0.5) + floor(lowHeader.a * 255.0 + 0.5) * 256.0
-                ) + 1.0;
-                return atlasStreamLowRemapUnchecked(uv) * lowSize / compactSize;
-            }
             return texel / (fallbackFactor * compactSize);
         }
         return vec2(cell * 0.5) / compactSize;
@@ -67,13 +58,18 @@ vec2 atlasStreamNearRemap(vec2 uv) {
 """;
 	private static final String LOW_REMAP_FUNCTION = """
 uniform sampler2D u_AtlasStreamLowRemap;
-vec2 atlasStreamLowRemapUnchecked(vec2 uv) {
+vec2 atlasStreamLowRemap(vec2 uv) {
     ivec2 remapSize = textureSize(u_AtlasStreamLowRemap, 0);
     if (remapSize.x <= 3) {
         return uv;
     }
     int headerY = remapSize.y - 1;
     vec4 destinationHeader = texelFetch(u_AtlasStreamLowRemap, ivec2(0, headerY), 0);
+    if (textureSize(gtexture, 0) != ivec2(
+        floor(destinationHeader.r * 255.0 + 0.5) + floor(destinationHeader.g * 255.0 + 0.5) * 256.0 + 1.0,
+        floor(destinationHeader.b * 255.0 + 0.5) + floor(destinationHeader.a * 255.0 + 0.5) * 256.0 + 1.0)) {
+        return uv;
+    }
     vec4 sourceHeader = texelFetch(u_AtlasStreamLowRemap, ivec2(1, headerY), 0);
     vec4 gridHeader = texelFetch(u_AtlasStreamLowRemap, ivec2(2, headerY), 0);
     vec2 sourceSize = vec2(
@@ -109,18 +105,6 @@ vec2 atlasStreamLowRemapUnchecked(vec2 uv) {
     float factor = exp2(float(encodedFactor - 1));
     return (destinationOriginPixels + (sourceTexel - sourceOriginPixels) / factor) / destinationSize;
 }
-vec2 atlasStreamLowRemap(vec2 uv) {
-    ivec2 remapSize = textureSize(u_AtlasStreamLowRemap, 0);
-    if (remapSize.x <= 3) {
-        return uv;
-    }
-    vec4 destinationHeader = texelFetch(u_AtlasStreamLowRemap, ivec2(0, remapSize.y - 1), 0);
-    ivec2 destinationSize = ivec2(
-        floor(destinationHeader.r * 255.0 + 0.5) + floor(destinationHeader.g * 255.0 + 0.5) * 256.0 + 1.0,
-        floor(destinationHeader.b * 255.0 + 0.5) + floor(destinationHeader.a * 255.0 + 0.5) * 256.0 + 1.0
-    );
-    return textureSize(gtexture, 0) == destinationSize ? atlasStreamLowRemapUnchecked(uv) : uv;
-}
 """;
 	private static final java.util.regex.Pattern MID_TEXCOORD = java.util.regex.Pattern.compile(
 		"vec2\\(mc_midTexCoord\\.xy\\) \\* ([0-9.]+(?:[eE][-+]?[0-9]+)?f?)"
@@ -148,7 +132,7 @@ vec2 atlasStreamAtlasRemap(vec2 uv, vec2 anchor) {
         floor(header0.b * 255.0 + 0.5) + floor(header0.a * 255.0 + 0.5) * 256.0
     ) + 1;
     if (textureSize(gtexture, 0) != compactSize) {
-        return atlasStreamLowRemap(uv);
+        return uv;
     }
     return atlasStreamNearRemap(uv, anchor);
 }
@@ -185,26 +169,31 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 				continue;
 			}
 			String source = entry.getValue();
-			if (!UV0_DECLARATION.matcher(source).find()) {
+			java.util.regex.Matcher declaration = UV0_DECLARATION.matcher(source);
+			if (!declaration.find()) {
 				continue;
 			}
+			String functions =
+				(GTEXTURE_DECLARATION.matcher(source).find() ? "" : "uniform sampler2D gtexture;\n")
+				+ REMAP_FUNCTION + LOW_REMAP_FUNCTION + ATLAS_ONLY_FUNCTION;
+			// Include declarations before iris_UV0 when identifying the midpoint attribute.
 			String patchedSource = VanillaNearShaderPatcher.patchReferences(source);
 			if (patchedSource.equals(source)) {
 				continue;
 			}
-			String functions =
-				(GTEXTURE_DECLARATION.matcher(patchedSource).find() ? "" : "uniform sampler2D gtexture;\n")
-				+ LOW_REMAP_FUNCTION + REMAP_FUNCTION + ATLAS_ONLY_FUNCTION;
-			java.util.regex.Matcher declaration = UV0_DECLARATION.matcher(patchedSource);
+			declaration = UV0_DECLARATION.matcher(patchedSource);
 			declaration.find();
-			entry.setValue(
-				patchedSource.substring(0, declaration.end()) + "\n" + functions
-					+ patchedSource.substring(declaration.end())
-			);
+			String head = patchedSource.substring(0, declaration.end());
+			String tail = patchedSource.substring(declaration.end());
+			entry.setValue(head + "\n" + functions + tail);
 			changed = true;
 		}
 		if (changed) {
 			com.malaron.atlasstream.client.atlas.AtlasRuntimeState.markVanillaRemapAvailable();
+			if (!vanillaLogged) {
+				vanillaLogged = true;
+				AtlasStream.LOGGER.info("Patched Iris-transformed vanilla vertex shaders for the near UV remap");
+			}
 			callback.setReturnValue(patched);
 		}
 	}
@@ -230,7 +219,7 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 			// Translucent terrain stays on the low atlas but shares these programs, so the remap only applies when the
 			// bound diffuse texture is the compact near atlas.
 			String atlasFunctions = (GTEXTURE_DECLARATION.matcher(source).find() ? "" : "uniform sampler2D gtexture;\n")
-				+ LOW_REMAP_FUNCTION + REMAP_FUNCTION + ATLAS_ONLY_FUNCTION;
+				+ REMAP_FUNCTION + LOW_REMAP_FUNCTION + ATLAS_ONLY_FUNCTION;
 			String replaced = source.substring(0, function) + atlasFunctions + source.substring(function);
 			replaced = replaced.replace(
 				TEXCOORD_RETURN,
