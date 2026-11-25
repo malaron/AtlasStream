@@ -89,7 +89,6 @@ public final class AtlasRuntimeState {
 	private static volatile List<Object> reducedPbrAtlases = List.of();
 	private static volatile GpuTexture lowResolutionTexture;
 	private static volatile GpuTextureView lowResolutionTextureView;
-	private static volatile GpuTextureView releasedBlockAtlasView;
 	private static volatile GpuTexture lowAtlasRemapTexture;
 	private static volatile GpuTextureView lowAtlasRemapTextureView;
 	private static volatile GpuTexture reloadFallbackTexture;
@@ -602,8 +601,7 @@ public final class AtlasRuntimeState {
 
 	public static GpuTextureView lowAtlasViewForFullSparseEntity(GpuTextureView view) {
 		NearAtlas near = nearAtlas;
-		if ((near != null && near.isUsable() && view == near.albedoView())
-				|| view == releasedBlockAtlasView) {
+		if (near != null && near.isUsable() && view == near.albedoView()) {
 			return lowResolutionTextureView;
 		}
 		return view;
@@ -1941,7 +1939,6 @@ public final class AtlasRuntimeState {
 		atlasOwnsLowResolutionTexture = false;
 		originalAtlasReleaseConfirmed = false;
 		lowResolutionTextureView = null;
-		releasedBlockAtlasView = null;
 		lowResolutionTexture = null;
 	}
 
@@ -3457,7 +3454,6 @@ public final class AtlasRuntimeState {
 		originalAtlasReleaseConfirmed = false;
 		GpuTextureView[] oldMipViews = atlasAccessor.atlasStream$getMipViews();
 		GpuTextureView oldTextureView = textureAccessor.atlasStream$getTextureView();
-		releasedBlockAtlasView = oldTextureView;
 		atlasAccessor.atlasStream$setMipViews(new GpuTextureView[0]);
 		textureAccessor.atlasStream$setTexture(lowResolutionTexture);
 		textureAccessor.atlasStream$setTextureView(lowResolutionTextureView);
