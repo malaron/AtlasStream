@@ -24,7 +24,7 @@ public final class LowAtlasPacker {
 					|| sprite.paddingX() < 0 || sprite.paddingY() < 0) {
 				throw new IllegalArgumentException("Sprite dimensions must be positive and padding non-negative");
 			}
-			int factor = reductionFactor(sprite.width(), sprite.height(), targetResolution);
+			int factor = reductionFactorForSprite(sprite, targetResolution);
 			int paddingX = Math.ceilDiv(sprite.paddingX(), factor);
 			int paddingY = Math.ceilDiv(sprite.paddingY(), factor);
 			int width = Math.max(1, Math.ceilDiv(sprite.width(), factor));
@@ -82,7 +82,7 @@ public final class LowAtlasPacker {
 					|| sprite.sourceY() + sprite.height() + sprite.paddingY() > sourceHeight) {
 				return null;
 			}
-			int factor = reductionFactor(sprite.width(), sprite.height(), targetResolution);
+			int factor = reductionFactorForSprite(sprite, targetResolution);
 			placements.put(
 				sprite.identifier(),
 				new Placement(
@@ -113,6 +113,14 @@ public final class LowAtlasPacker {
 			factor <<= 1;
 		}
 		return factor;
+	}
+
+	private static int reductionFactorForSprite(Sprite sprite, int targetResolution) {
+		String path = sprite.identifier().getPath();
+		if (path.startsWith("entity/chest/") || path.startsWith("entity/shulker/")) {
+			return 1;
+		}
+		return reductionFactor(sprite.width(), sprite.height(), targetResolution);
 	}
 
 	private static List<Placement> placeInShelves(List<Placement> placements, int atlasWidth) {
