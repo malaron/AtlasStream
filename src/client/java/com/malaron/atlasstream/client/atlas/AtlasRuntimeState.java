@@ -902,9 +902,6 @@ public final class AtlasRuntimeState {
 	}
 
 	public static void recordChunkSpriteUsage(net.minecraft.client.renderer.texture.TextureAtlasSprite sprite) {
-		if (!isTerrainSectionSprite(sprite.atlasLocation(), sprite.contents().name())) {
-			return;
-		}
 		NearAtlas near = nearAtlas;
 		long sectionKey = SodiumChunkMeshPriority.currentSectionKey();
 		// Kept in every mode so the streamed preview knows each section's sprites after shaders are switched off,
@@ -934,11 +931,6 @@ public final class AtlasRuntimeState {
 			generation,
 			SodiumChunkMeshPriority.distanceSquared()
 		);
-	}
-
-	static boolean isTerrainSectionSprite(Identifier atlasLocation, Identifier spriteName) {
-		return TextureAtlas.LOCATION_BLOCKS.equals(atlasLocation)
-			&& !spriteName.getPath().startsWith("entity/");
 	}
 
 	private static final double SECTION_RADIUS = 14.0;
@@ -2937,9 +2929,7 @@ public final class AtlasRuntimeState {
 						net.minecraft.client.Minecraft.getInstance().getResourceManager()
 					);
 					if (created != null && created.isCompact() && NearAtlas.hybridRequested()) {
-						AtlasStream.LOGGER.info(
-							"Repacked low atlas uses compact near-atlas streaming instead of the layout-based hybrid fallback"
-						);
+						created.initializeRepackedHybrid(image.mipLevels(), image.pbrImages());
 					}
 					if (nearAtlas != null) {
 						nearAtlas.close();

@@ -66,7 +66,9 @@ public final class NearAtlas implements AutoCloseable {
 	private static final AtomicLong RESIDENCY_REVISION = new AtomicLong();
 	// -Datlasstream.compactSize=<texels> shrinks the compact atlas to force overflow when testing.
 	private static final int MAX_COMPACT_SIZE = Integer.getInteger("atlasstream.compactSize", 16384);
-	private static final boolean HYBRID_REQUESTED = Boolean.getBoolean("atlasstream.hybridCompact");
+	private static final boolean HYBRID_REQUESTED = Boolean.parseBoolean(
+		System.getProperty("atlasstream.hybridCompact", "true")
+	);
 	private static final boolean PRESERVE_TRANSPARENT_MIPS =
 		Boolean.parseBoolean(System.getProperty("atlasstream.preserveTransparentMips", "true"));
 	private static final int DEFAULT_NORMAL = 0xFF8080FF;
@@ -324,6 +326,7 @@ public final class NearAtlas implements AutoCloseable {
 		if (!compact || !HYBRID_REQUESTED) {
 			return;
 		}
+
 		CompactHybridLayout layout = CompactHybridLayout.create(width, height, bigWidth, bigHeight, factor, mipLevels, PAGE);
 		if (lowPbr == null || lowAlbedo.size() != mipLevels
 				|| lowPbr.normal().size() != mipLevels || lowPbr.specular().size() != mipLevels) {
@@ -353,6 +356,40 @@ public final class NearAtlas implements AutoCloseable {
 		hybridLayout = layout;
 		AtlasStream.LOGGER.info(
 			"Experimental hybrid compact atlas enabled: fallback {}x{}, reserved {}x{}, committed {} MiB",
+			layout.fallbackWidth(), layout.fallbackHeight(), layout.reservedWidth(), layout.reservedHeight(),
+			committedBytes() / (1024 * 1024)
+		);
+	}
+
+	void initializeRepackedHybrid(
+		List<NativeImage> lowAlbedo, IrisPbrAtlasReducer.Images lowPbr
+	) {
+		if (!compact || !HYBRID_REQUESTED) {
+			return;
+		}
+		if (lowAlbedo.isEmpty() || lowAlbedo.size() != mipLevels
+				|| lowPbr == null || lowPbr.normal().size() != mipLevels
+				|| lowPbr.specular().size() != mipLevels) {
+			throw new IllegalStateException("Repacked hybrid atlas requires complete albedo and PBR mip chains");
+		}
+		CompactHybridLayout layout = CompactHybridLayout.createFallback(
+			width, height, lowAlbedo.get(0).getWidth(), lowAlbedo.get(0).getHeight(), mipLevels, PAGE
+		);
+		initializeHybridLayer(albedo, lowAlbedo);
+		initializeHybridLayer(normal, lowPbr.normal());
+		initializeHybridLayer(specular, lowPbr.specular());
+		int previousBinding = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+		try {
+			GL11.glBindTexture(GL11.GL_TEXTURE_2D, remapId);
+			uploadRemapRect(1, cellsY, 1, 1, new int[] {packBytes(cell, 1, 0, 0)});
+			checkGl("enabling repacked hybrid compact atlas remapping");
+		} finally {
+			GL11.glBindTexture(GL11.GL_TEXTURE_BINDING_2D, previousBinding);
+		}
+		freeSlots = layout.createStreamedSlots();
+		hybridLayout = layout;
+		AtlasStream.LOGGER.info(
+			"Repacked hybrid compact atlas enabled: fallback {}x{}, reserved {}x{}, committed {} MiB",
 			layout.fallbackWidth(), layout.fallbackHeight(), layout.reservedWidth(), layout.reservedHeight(),
 			committedBytes() / (1024 * 1024)
 		);

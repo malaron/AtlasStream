@@ -44,6 +44,15 @@ vec2 atlasStreamNearRemap(vec2 uv, vec2 anchor) {
     if (entry.a < 0.5) {
         float fallbackFactor = floor(header1.g * 255.0 + 0.5);
         if (fallbackFactor > 0.0) {
+            ivec2 lowRemapSize = textureSize(u_AtlasStreamLowRemap, 0);
+            if (lowRemapSize.x > 3) {
+                vec4 lowHeader = texelFetch(u_AtlasStreamLowRemap, ivec2(0, lowRemapSize.y - 1), 0);
+                vec2 lowSize = vec2(
+                    floor(lowHeader.r * 255.0 + 0.5) + floor(lowHeader.g * 255.0 + 0.5) * 256.0,
+                    floor(lowHeader.b * 255.0 + 0.5) + floor(lowHeader.a * 255.0 + 0.5) * 256.0
+                ) + 1.0;
+                return atlasStreamLowRemapUnchecked(uv) * lowSize / compactSize;
+            }
             return texel / (fallbackFactor * compactSize);
         }
         return vec2(cell * 0.5) / compactSize;
@@ -58,18 +67,13 @@ vec2 atlasStreamNearRemap(vec2 uv) {
 """;
 	private static final String LOW_REMAP_FUNCTION = """
 uniform sampler2D u_AtlasStreamLowRemap;
-vec2 atlasStreamLowRemap(vec2 uv) {
+vec2 atlasStreamLowRemapUnchecked(vec2 uv) {
     ivec2 remapSize = textureSize(u_AtlasStreamLowRemap, 0);
     if (remapSize.x <= 3) {
         return uv;
     }
     int headerY = remapSize.y - 1;
     vec4 destinationHeader = texelFetch(u_AtlasStreamLowRemap, ivec2(0, headerY), 0);
-    if (textureSize(gtexture, 0) != ivec2(
-        floor(destinationHeader.r * 255.0 + 0.5) + floor(destinationHeader.g * 255.0 + 0.5) * 256.0 + 1.0,
-        floor(destinationHeader.b * 255.0 + 0.5) + floor(destinationHeader.a * 255.0 + 0.5) * 256.0 + 1.0)) {
-        return uv;
-    }
     vec4 sourceHeader = texelFetch(u_AtlasStreamLowRemap, ivec2(1, headerY), 0);
     vec4 gridHeader = texelFetch(u_AtlasStreamLowRemap, ivec2(2, headerY), 0);
     vec2 sourceSize = vec2(
@@ -104,6 +108,18 @@ vec2 atlasStreamLowRemap(vec2 uv) {
     ) + 1.0;
     float factor = exp2(float(encodedFactor - 1));
     return (destinationOriginPixels + (sourceTexel - sourceOriginPixels) / factor) / destinationSize;
+}
+vec2 atlasStreamLowRemap(vec2 uv) {
+    ivec2 remapSize = textureSize(u_AtlasStreamLowRemap, 0);
+    if (remapSize.x <= 3) {
+        return uv;
+    }
+    vec4 destinationHeader = texelFetch(u_AtlasStreamLowRemap, ivec2(0, remapSize.y - 1), 0);
+    ivec2 destinationSize = ivec2(
+        floor(destinationHeader.r * 255.0 + 0.5) + floor(destinationHeader.g * 255.0 + 0.5) * 256.0 + 1.0,
+        floor(destinationHeader.b * 255.0 + 0.5) + floor(destinationHeader.a * 255.0 + 0.5) * 256.0 + 1.0
+    );
+    return textureSize(gtexture, 0) == destinationSize ? atlasStreamLowRemapUnchecked(uv) : uv;
 }
 """;
 	private static final java.util.regex.Pattern MID_TEXCOORD = java.util.regex.Pattern.compile(

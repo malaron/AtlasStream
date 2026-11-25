@@ -38,6 +38,18 @@ class CompactHybridLayoutTest {
 	}
 
 	@Test
+	void acceptsAlreadyRepackedFallbackDimensions() {
+		CompactHybridLayout layout = CompactHybridLayout.createFallback(
+			16384, 16384, 8192, 4096, 5, 128
+		);
+
+		assertEquals(8192, layout.fallbackWidth());
+		assertEquals(4096, layout.fallbackHeight());
+		assertEquals(8192, layout.reservedWidth());
+		assertEquals(4096, layout.reservedHeight());
+	}
+
+	@Test
 	void rejectsFallbackThatCannotFitOrLeaveStreamedCapacity() {
 		assertThrows(IllegalArgumentException.class,
 			() -> CompactHybridLayout.create(16384, 16384, 65536, 32768, 2, 5, 128));
