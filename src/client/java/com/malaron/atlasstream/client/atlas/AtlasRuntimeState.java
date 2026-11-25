@@ -609,6 +609,10 @@ public final class AtlasRuntimeState {
 	public static net.minecraft.client.renderer.texture.UvMapping remapEntityBlockUv(
 		net.minecraft.client.renderer.texture.UvMapping mapping
 	) {
+		NearAtlas near = nearAtlas;
+		if (near != null && near.isUsable() && near.isCompact()) {
+			return mapping;
+		}
 		LowAtlasRemap remap = lowAtlasRemap;
 		if (remap == null
 				|| !(mapping instanceof TextureAtlasSprite sprite)
