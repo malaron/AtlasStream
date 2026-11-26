@@ -81,103 +81,16 @@ vec4 atlasStreamSampleVirtualSpecular(vec2 displayUv, vec2 originalUv, float bia
 
 vec2 atlasStreamOriginalUvFromDisplay(
     vec2 baseOriginalUv,
-    vec2 displayUv,
     vec2 baseDisplayUv,
-    out vec2 derivativeScale
+    vec2 displayUv
 ) {
-    vec4 metadata = texelFetch(u_AtlasStreamVirtualMetadata, ivec2(0), 0);
-    vec2 originalSize = vec2(
-        floor(metadata.r * 255.0 + 0.5) + floor(metadata.g * 255.0 + 0.5) * 256.0 + 1.0,
-        floor(metadata.b * 255.0 + 0.5) + floor(metadata.a * 255.0 + 0.5) * 256.0 + 1.0
-    );
-    derivativeScale = vec2(textureSize(gtexture, 0)) / originalSize;
-
-    ivec2 nearRemapSize = textureSize(u_AtlasStreamNearRemap, 0);
-    if (nearRemapSize.x > 1) {
-        int rows = nearRemapSize.y - 1;
-        vec4 header = texelFetch(u_AtlasStreamNearRemap, ivec2(0, rows), 0);
-        vec2 compactSize = vec2(
-            floor(header.r * 255.0 + 0.5) + floor(header.g * 255.0 + 0.5) * 256.0,
-            floor(header.b * 255.0 + 0.5) + floor(header.a * 255.0 + 0.5) * 256.0
-        ) + 1.0;
-        if (textureSize(gtexture, 0) == ivec2(compactSize)) {
-            vec4 gridHeader = texelFetch(u_AtlasStreamNearRemap, ivec2(1, rows), 0);
-            float cell = floor(gridHeader.r * 255.0 + 0.5);
-            ivec2 coordinate = clamp(
-                ivec2(floor(baseOriginalUv * vec2(nearRemapSize.x, rows) )),
-                ivec2(0),
-                ivec2(nearRemapSize.x - 1, rows - 1)
-            );
-            vec4 entry = texelFetch(u_AtlasStreamNearRemap, coordinate, 0);
-            if (entry.a >= 0.5) {
-                vec2 delta = vec2(
-                    floor(entry.r * 255.0 + 0.5)
-                        + floor(entry.g * 255.0 + 0.5) * 256.0 - 32768.0,
-                    floor(entry.b * 255.0 + 0.5)
-                        + mod(floor(entry.a * 255.0 + 0.5), 128.0) * 256.0 - 4096.0
-                );
-                derivativeScale = compactSize / (vec2(nearRemapSize.x, rows) * cell);
-                vec2 original = baseOriginalUv
-                    + (displayUv - baseDisplayUv) * derivativeScale;
-                return original;
-            }
-        }
+    mat2 displayJacobian = mat2(dFdx(baseDisplayUv), dFdy(baseDisplayUv));
+    mat2 originalJacobian = mat2(dFdx(baseOriginalUv), dFdy(baseOriginalUv));
+    if (abs(determinant(displayJacobian)) < 1e-12) {
+        return baseOriginalUv;
     }
-
-    ivec2 remapSize = textureSize(u_AtlasStreamLowRemap, 0);
-    if (remapSize.x > 3) {
-        int headerY = remapSize.y - 1;
-        vec4 destinationHeader = texelFetch(u_AtlasStreamLowRemap, ivec2(0, headerY), 0);
-        vec2 destinationSize = vec2(
-            floor(destinationHeader.r * 255.0 + 0.5) + floor(destinationHeader.g * 255.0 + 0.5) * 256.0 + 1.0,
-            floor(destinationHeader.b * 255.0 + 0.5) + floor(destinationHeader.a * 255.0 + 0.5) * 256.0 + 1.0
-        );
-        if (textureSize(gtexture, 0) == destinationSize) {
-            vec4 sourceHeader = texelFetch(u_AtlasStreamLowRemap, ivec2(1, headerY), 0);
-            vec4 gridHeader = texelFetch(u_AtlasStreamLowRemap, ivec2(2, headerY), 0);
-            vec2 sourceSize = vec2(
-                floor(sourceHeader.r * 255.0 + 0.5) + floor(sourceHeader.g * 255.0 + 0.5) * 256.0,
-                floor(sourceHeader.b * 255.0 + 0.5) + floor(sourceHeader.a * 255.0 + 0.5) * 256.0
-            ) + 1.0;
-            float cell = floor(gridHeader.r * 255.0 + 0.5)
-                + floor(gridHeader.g * 255.0 + 0.5) * 256.0;
-            ivec2 coordinate = clamp(
-                ivec2(floor(baseOriginalUv * sourceSize / cell)),
-                ivec2(0),
-                ivec2(remapSize.x / 3 - 1, remapSize.y - 2)
-            );
-            vec4 factorEntry = texelFetch(
-                u_AtlasStreamLowRemap, ivec2(coordinate.x * 3 + 2, coordinate.y), 0
-            );
-            int encodedFactor = int(floor(factorEntry.r * 255.0 + 0.5));
-            if (encodedFactor > 0) {
-                vec4 sourceOriginEntry = texelFetch(
-                    u_AtlasStreamLowRemap, ivec2(coordinate.x * 3, coordinate.y), 0
-                );
-                vec4 destinationEntry = texelFetch(
-                    u_AtlasStreamLowRemap, ivec2(coordinate.x * 3 + 1, coordinate.y), 0
-                );
-                vec2 sourceOrigin = vec2(
-                    floor(sourceOriginEntry.r * 255.0 + 0.5)
-                        + floor(sourceOriginEntry.g * 255.0 + 0.5) * 256.0,
-                    floor(sourceOriginEntry.b * 255.0 + 0.5)
-                        + floor(sourceOriginEntry.a * 255.0 + 0.5) * 256.0
-                );
-                vec2 destinationOrigin = vec2(
-                    floor(destinationEntry.r * 255.0 + 0.5)
-                        + floor(destinationEntry.g * 255.0 + 0.5) * 256.0,
-                    floor(destinationEntry.b * 255.0 + 0.5)
-                        + floor(destinationEntry.a * 255.0 + 0.5) * 256.0
-                );
-                float factor = exp2(float(encodedFactor - 1));
-                derivativeScale = destinationSize * factor / sourceSize;
-                return baseOriginalUv
-                    + (displayUv - baseDisplayUv) * factor
-                    * destinationSize / sourceSize;
-            }
-        }
-    }
-    return baseOriginalUv;
+    return baseOriginalUv
+        + originalJacobian * inverse(displayJacobian) * (displayUv - baseDisplayUv);
 }
 
 vec4 atlasStreamSampleParallax(
@@ -188,25 +101,18 @@ vec4 atlasStreamSampleParallax(
     vec2 originalUv,
     mat2 derivatives
 ) {
-    vec2 derivativeScale;
     vec2 parallaxOriginalUv = atlasStreamOriginalUvFromDisplay(
-        originalUv, displayUv, baseDisplayUv, derivativeScale
+        originalUv, baseDisplayUv, displayUv
     );
     vec2 cacheUv = atlasStreamVirtualCacheUv(parallaxOriginalUv, cacheTexture);
     if (cacheUv.x < 0.0) {
         return textureGrad(fallbackTexture, displayUv, derivatives[0], derivatives[1]);
     }
-    vec4 metadata = texelFetch(u_AtlasStreamVirtualMetadata, ivec2(0), 0);
-    vec2 originalSize = vec2(
-        floor(metadata.r * 255.0 + 0.5) + floor(metadata.g * 255.0 + 0.5) * 256.0 + 1.0,
-        floor(metadata.b * 255.0 + 0.5) + floor(metadata.a * 255.0 + 0.5) * 256.0 + 1.0
-    );
-    derivativeScale *= originalSize / vec2(textureSize(cacheTexture, 0));
     return textureGrad(
         cacheTexture,
         cacheUv,
-        derivatives[0] * derivativeScale,
-        derivatives[1] * derivativeScale
+        dFdx(cacheUv),
+        dFdy(cacheUv)
     );
 }
 
