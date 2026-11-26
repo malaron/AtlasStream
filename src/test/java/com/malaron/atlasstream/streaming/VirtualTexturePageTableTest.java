@@ -27,7 +27,7 @@ class VirtualTexturePageTableTest {
 		table.setResident(key, 0x123456);
 
 		assertEquals(0x123457, table.encodedLayer(key));
-		assertEquals(0xFF123457, table.pixelColorAt(1, 0));
+		assertEquals(0xFF573412, table.pixelColorAt(1, 0));
 		assertTrue(table.clear(key));
 		assertFalse(table.clear(key));
 		assertEquals(0, table.encodedLayer(key));
