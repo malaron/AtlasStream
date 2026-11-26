@@ -31,32 +31,20 @@ public final class CompactHybridLayout {
 				|| sourceWidth % factor != 0 || sourceHeight % factor != 0) {
 			throw new IllegalArgumentException("Invalid source dimensions, scale, mip count or page size");
 		}
-		return create(
-			atlasWidth, atlasHeight, sourceWidth / factor, sourceHeight / factor, mipLevels, pageSize
-		);
-	}
-
-	public static CompactHybridLayout create(
-		int atlasWidth, int atlasHeight, int fallbackWidth, int fallbackHeight, int mipLevels, int pageSize
-	) {
-		if (atlasWidth <= 0 || atlasHeight <= 0 || fallbackWidth <= 0 || fallbackHeight <= 0
-				|| mipLevels <= 0 || mipLevels > 30 || pageSize <= 0
-				|| (pageSize & (pageSize - 1)) != 0) {
-			throw new IllegalArgumentException("Invalid fallback dimensions, mip count or page size");
-		}
 		long alignment = (long) pageSize << (mipLevels - 1);
 		if (atlasWidth % alignment != 0 || atlasHeight % alignment != 0) {
 			throw new IllegalArgumentException("Compact atlas dimensions must align to sparse pages at every mip");
 		}
-		long reservedWidth = ((fallbackWidth + alignment - 1) / alignment) * alignment;
-		long reservedHeight = ((fallbackHeight + alignment - 1) / alignment) * alignment;
+		int lowWidth = sourceWidth / factor;
+		int lowHeight = sourceHeight / factor;
+		long reservedWidth = ((lowWidth + alignment - 1) / alignment) * alignment;
+		long reservedHeight = ((lowHeight + alignment - 1) / alignment) * alignment;
 		if (reservedWidth > atlasWidth || reservedHeight > atlasHeight
 				|| (reservedWidth == atlasWidth && reservedHeight == atlasHeight)) {
 			throw new IllegalArgumentException("Reduced fallback leaves no space for streamed sprites");
 		}
 		return new CompactHybridLayout(
-			atlasWidth, atlasHeight, fallbackWidth, fallbackHeight,
-			(int) reservedWidth, (int) reservedHeight, mipLevels
+			atlasWidth, atlasHeight, lowWidth, lowHeight, (int) reservedWidth, (int) reservedHeight, mipLevels
 		);
 	}
 
@@ -103,22 +91,6 @@ public final class CompactHybridLayout {
 		}
 		if (reservedHeight < atlasHeight) {
 			slots.release(0, reservedHeight, atlasWidth, atlasHeight - reservedHeight);
-		}
-		return slots;
-	}
-
-	public CompactFreeSlots createTerrainSlots() {
-		CompactFreeSlots slots = new CompactFreeSlots();
-		if (reservedHeight < atlasHeight) {
-			slots.release(0, reservedHeight, atlasWidth, atlasHeight - reservedHeight);
-		}
-		return slots;
-	}
-
-	public CompactFreeSlots createCompatibilitySlots() {
-		CompactFreeSlots slots = new CompactFreeSlots();
-		if (reservedWidth < atlasWidth) {
-			slots.release(reservedWidth, 0, atlasWidth - reservedWidth, reservedHeight);
 		}
 		return slots;
 	}

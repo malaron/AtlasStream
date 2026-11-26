@@ -13,38 +13,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CompactHybridLayoutTest {
 	@Test
-	void embedsRepackedFallbackDirectly() {
-		CompactHybridLayout layout = CompactHybridLayout.create(
-			16384, 16384, 8192, 4096, 5, 128
-		);
-
-		assertEquals(8192, layout.fallbackWidth());
-		assertEquals(4096, layout.fallbackHeight());
-		assertEquals(8192, layout.reservedWidth());
-		assertEquals(4096, layout.reservedHeight());
-	}
-
-	@Test
-	void compatibilityAndTerrainSlotsAreDisjoint() {
-		CompactHybridLayout layout = CompactHybridLayout.create(
-			16384, 16384, 8192, 4096, 5, 128
-		);
-		CompactFreeSlots compatibility = layout.createCompatibilitySlots();
-		CompactFreeSlots terrain = layout.createTerrainSlots();
-
-		int[] compatibilitySlot = compatibility.allocate(1088, 1088);
-		int[] terrainSlot = terrain.allocate(1088, 1088);
-		assertNotNull(compatibilitySlot);
-		assertNotNull(terrainSlot);
-		assertTrue(
-			compatibilitySlot[0] + 1088 <= terrainSlot[0]
-				|| terrainSlot[0] + 1088 <= compatibilitySlot[0]
-				|| compatibilitySlot[1] + 1088 <= terrainSlot[1]
-				|| terrainSlot[1] + 1088 <= compatibilitySlot[1]
-		);
-	}
-
-	@Test
 	void packsCurrentLargeAtlasAndMapsOriginalUvsToReducedPixels() {
 		CompactHybridLayout layout = CompactHybridLayout.create(16384, 16384, 65536, 32768, 8, 5, 128);
 		assertEquals(8192, layout.fallbackWidth());

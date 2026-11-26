@@ -129,22 +129,6 @@ public final class SodiumTerrainIntegration {
 		Method renderMethod = RENDER_METHODS.get(renderer.getClass());
 		boolean distancePreview = AtlasRuntimeState.isDistancePreviewEnabled();
 		boolean translucent = isTranslucent(terrainRenderPass);
-		if (distancePreview && AtlasRuntimeState.isNearAtlasHybrid()) {
-			arguments[1] = renderLists;
-			refreshIrisPbrSamplers();
-			TRANSLUCENT_PASS.set(translucent);
-			boolean recording = LodPerformanceStats.isRecording();
-			long drawStart = recording ? System.nanoTime() : 0;
-			try {
-				invoke(renderMethod, renderer, arguments);
-				if (recording) {
-					LodPerformanceStats.recordHybridDraw(System.nanoTime() - drawStart);
-				}
-			} finally {
-				TRANSLUCENT_PASS.remove();
-			}
-			return;
-		}
 		if (distancePreview && AtlasRuntimeState.isLowAtlasOriginalLayout()) {
 			arguments[1] = renderLists;
 			TRANSLUCENT_PASS.set(translucent);
@@ -295,8 +279,7 @@ public final class SodiumTerrainIntegration {
 				&& AtlasRuntimeState.isNearAtlasActive()
 				&& isIrisShaderPackInUse()) {
 			// The atlas texture slot returns the near atlas, so every terrain pass must pick its atlas explicitly.
-			com.mojang.renderpearl.api.textures.GpuTextureView near = (ACTIVE_LOD.get() == SectionLod.HIGH_RESOLUTION
-					|| (ACTIVE_LOD.get() == null && AtlasRuntimeState.isNearAtlasHybrid()))
+			com.mojang.renderpearl.api.textures.GpuTextureView near = ACTIVE_LOD.get() == SectionLod.HIGH_RESOLUTION
 				? AtlasRuntimeState.nearAtlasView()
 				: AtlasRuntimeState.lowResolutionTextureViewForDistancePreview();
 			if (near != null) {

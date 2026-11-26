@@ -66,8 +66,7 @@ public final class NearAtlas implements AutoCloseable {
 	private static final AtomicLong RESIDENCY_REVISION = new AtomicLong();
 	// -Datlasstream.compactSize=<texels> shrinks the compact atlas to force overflow when testing.
 	private static final int MAX_COMPACT_SIZE = Integer.getInteger("atlasstream.compactSize", 16384);
-	private static final boolean HYBRID_REQUESTED =
-		Boolean.parseBoolean(System.getProperty("atlasstream.hybridCompact", "true"));
+	private static final boolean HYBRID_REQUESTED = Boolean.getBoolean("atlasstream.hybridCompact");
 	private static final boolean PRESERVE_TRANSPARENT_MIPS =
 		Boolean.parseBoolean(System.getProperty("atlasstream.preserveTransparentMips", "true"));
 	private static final int DEFAULT_NORMAL = 0xFF8080FF;
@@ -95,7 +94,6 @@ public final class NearAtlas implements AutoCloseable {
 	private GpuTextureView remapView;
 	private final List<int[]> shelves = new ArrayList<>();
 	private CompactFreeSlots freeSlots = new CompactFreeSlots();
-	private CompactFreeSlots compatibilitySlots = new CompactFreeSlots();
 	private CompactHybridLayout hybridLayout;
 	private int shelfCursorY;
 	private boolean misalignedLogged;
@@ -113,9 +111,6 @@ public final class NearAtlas implements AutoCloseable {
 	private static final long PRESSURE_EVICT_BUDGET_NANOS = 6_000_000L;
 	private static final int MAX_PRESSURE_EVICTIONS_PER_REFRESH = 128;
 	private static final double PRESSURE_SWAP_MARGIN_BLOCKS = 8.0;
-	private static final long HYBRID_PRESSURE_EVICT_BUDGET_NANOS = 2_000_000L;
-	private static final int HYBRID_MAX_PRESSURE_EVICTIONS_PER_REFRESH = 8;
-	private static final double HYBRID_PRESSURE_SWAP_MARGIN_BLOCKS = 32.0;
 	private final int mipLevels;
 	private final ResourceManager resourceManager;
 	private final Layer albedo;
@@ -319,26 +314,21 @@ public final class NearAtlas implements AutoCloseable {
 		return HYBRID_REQUESTED;
 	}
 
-	public boolean isHybrid() {
+	boolean isHybrid() {
 		return hybridLayout != null;
 	}
 
-	void initializeHybrid(List<NativeImage> lowAlbedo, IrisPbrAtlasReducer.Images lowPbr) {
+	void initializeHybrid(
+		int factor, List<NativeImage> lowAlbedo, IrisPbrAtlasReducer.Images lowPbr
+	) {
 		if (!compact || !HYBRID_REQUESTED) {
 			return;
 		}
+		CompactHybridLayout layout = CompactHybridLayout.create(width, height, bigWidth, bigHeight, factor, mipLevels, PAGE);
 		if (lowPbr == null || lowAlbedo.size() != mipLevels
 				|| lowPbr.normal().size() != mipLevels || lowPbr.specular().size() != mipLevels) {
 			throw new IllegalStateException("Hybrid compact atlas requires complete albedo and PBR mip chains");
 		}
-		CompactHybridLayout layout = CompactHybridLayout.create(
-			width,
-			height,
-			lowAlbedo.getFirst().getWidth(),
-			lowAlbedo.getFirst().getHeight(),
-			mipLevels,
-			PAGE
-		);
 		for (List<NativeImage> images : List.of(lowAlbedo, lowPbr.normal(), lowPbr.specular())) {
 			for (int level = 0; level < mipLevels; level++) {
 				NativeImage image = images.get(level);
@@ -354,16 +344,15 @@ public final class NearAtlas implements AutoCloseable {
 		int previousBinding = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
 		try {
 			GL11.glBindTexture(GL11.GL_TEXTURE_2D, remapId);
-			uploadRemapRect(1, cellsY, 1, 1, new int[] {packBytes(cell, 1, 0, 0)});
+			uploadRemapRect(1, cellsY, 1, 1, new int[] {packBytes(cell, factor, 0, 0)});
 			checkGl("enabling hybrid compact atlas remapping");
 		} finally {
 			GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousBinding);
 		}
-		freeSlots = layout.createTerrainSlots();
-		compatibilitySlots = layout.createCompatibilitySlots();
+		freeSlots = layout.createStreamedSlots();
 		hybridLayout = layout;
 		AtlasStream.LOGGER.info(
-			"Hybrid compact atlas enabled: repacked fallback {}x{}, reserved {}x{}, committed {} MiB",
+			"Experimental hybrid compact atlas enabled: fallback {}x{}, reserved {}x{}, committed {} MiB",
 			layout.fallbackWidth(), layout.fallbackHeight(), layout.reservedWidth(), layout.reservedHeight(),
 			committedBytes() / (1024 * 1024)
 		);
@@ -537,8 +526,8 @@ public final class NearAtlas implements AutoCloseable {
 	}
 
 	// Finds a free slot of the given size, aligned to the cell size, in the compact atlas.
-	private int[] allocateSlot(boolean compatibility, int w, int h) {
-		int[] free = (compatibility && isHybrid() ? compatibilitySlots : freeSlots).allocate(w, h);
+	private int[] allocateSlot(int w, int h) {
+		int[] free = freeSlots.allocate(w, h);
 		if (free != null) {
 			return free;
 		}
@@ -563,8 +552,7 @@ public final class NearAtlas implements AutoCloseable {
 
 	private void freeSlot(Geometry g) {
 		if (compact) {
-			(isHybrid() && g.compatibility ? compatibilitySlots : freeSlots)
-				.release(g.x, g.y, g.slotW, g.slotH);
+			freeSlots.release(g.x, g.y, g.slotW, g.slotH);
 		}
 	}
 
@@ -781,16 +769,14 @@ public final class NearAtlas implements AutoCloseable {
 		}
 		evictUnneeded(needed, config, radius <= 0.0, now);
 		// Simulate reservations so each retry has enough free space before it is queued.
-		if (!waitingForSlot.isEmpty()
-				&& (!freeSlots.isEmpty() || (isHybrid() && !compatibilitySlots.isEmpty()))) {
+		if (!waitingForSlot.isEmpty() && !freeSlots.isEmpty()) {
 			List<TextureAtlasSprite> waiting = new ArrayList<>(waitingForSlot);
 			waiting.sort(this::comparePriority);
 			CompactFreeSlots free = freeSlots.copy();
-			CompactFreeSlots compatibilityFree = compatibilitySlots.copy();
-			reserveRetries(free, compatibilityFree);
+			reserveRetries(free);
 			for (TextureAtlasSprite sprite : waiting) {
 				long key = slotKey(sprite);
-				if (allocateFrom(isCompatibilitySprite(sprite) ? compatibilityFree : free, key)) {
+				if (allocateFrom(free, key)) {
 					retryIncoming.add(sprite);
 					waitingForSlot.remove(sprite);
 				}
@@ -817,8 +803,7 @@ public final class NearAtlas implements AutoCloseable {
 	private boolean canEvictFor(TextureAtlasSprite waiting, TextureAtlasSprite victim) {
 		return CompactAtlasPriority.canEvict(
 			preferredSprites.contains(waiting), distanceOf(waiting),
-			preferredSprites.contains(victim), distanceOf(victim),
-			isHybrid() ? HYBRID_PRESSURE_SWAP_MARGIN_BLOCKS : PRESSURE_SWAP_MARGIN_BLOCKS
+			preferredSprites.contains(victim), distanceOf(victim), PRESSURE_SWAP_MARGIN_BLOCKS
 		);
 	}
 
@@ -840,17 +825,10 @@ public final class NearAtlas implements AutoCloseable {
 		return key != -1L && free.allocate((int) (key >>> 32), (int) key) != null;
 	}
 
-	private void reserveRetries(CompactFreeSlots terrain, CompactFreeSlots compatibility) {
+	private void reserveRetries(CompactFreeSlots free) {
 		for (TextureAtlasSprite retry : retryIncoming) {
-			allocateFrom(
-				isCompatibilitySprite(retry) ? compatibility : terrain,
-				slotKey(retry)
-			);
+			allocateFrom(free, slotKey(retry));
 		}
-	}
-
-	private static boolean isCompatibilitySprite(TextureAtlasSprite sprite) {
-		return sprite.contents().name().getPath().startsWith("entity/");
 	}
 
 	// Under slot pressure, drop lower-priority sprites first. The distance margin prevents similarly near swaps.
@@ -870,27 +848,18 @@ public final class NearAtlas implements AutoCloseable {
 				far.contents().name(), needed.contains(far) ? (int) distanceOf(far) : -1, waiting.size(), victims.size()
 			);
 		}
-		long deadline = System.nanoTime() + (isHybrid()
-			? HYBRID_PRESSURE_EVICT_BUDGET_NANOS
-			: PRESSURE_EVICT_BUDGET_NANOS);
-		int maximumEvictions = isHybrid()
-			? HYBRID_MAX_PRESSURE_EVICTIONS_PER_REFRESH
-			: MAX_PRESSURE_EVICTIONS_PER_REFRESH;
+		long deadline = System.nanoTime() + PRESSURE_EVICT_BUDGET_NANOS;
 		try {
 			CompactFreeSlots free = freeSlots.copy();
-			CompactFreeSlots compatibilityFree = compatibilitySlots.copy();
-			reserveRetries(free, compatibilityFree);
+			reserveRetries(free);
 			Set<Long> releasedPages = new java.util.HashSet<>();
 			int evictions = 0;
 			for (TextureAtlasSprite sprite : waiting) {
-				if (evictions >= maximumEvictions || System.nanoTime() >= deadline) {
+				if (evictions >= MAX_PRESSURE_EVICTIONS_PER_REFRESH || System.nanoTime() >= deadline) {
 					break;
 				}
 				long key = slotKey(sprite);
-				CompactFreeSlots candidates = isCompatibilitySprite(sprite)
-					? compatibilityFree
-					: free;
-				if (allocateFrom(candidates, key)) {
+				if (allocateFrom(free, key)) {
 					continue;
 				}
 				if (key == -1L) {
@@ -901,9 +870,7 @@ public final class NearAtlas implements AutoCloseable {
 				TextureAtlasSprite victim = null;
 				for (TextureAtlasSprite candidate : victims) {
 					Geometry g = resident.get(candidate);
-					if (g != null
-							&& g.compatibility == isCompatibilitySprite(sprite)
-							&& g.slotW >= wantedWidth && g.slotH >= wantedHeight
+					if (g != null && g.slotW >= wantedWidth && g.slotH >= wantedHeight
 							&& canEvictFor(sprite, candidate)) {
 						victim = candidate;
 						break;
@@ -913,8 +880,8 @@ public final class NearAtlas implements AutoCloseable {
 					continue;
 				}
 				Geometry geometry = resident.get(victim);
-				candidates.release(geometry.x, geometry.y, geometry.slotW, geometry.slotH);
-				allocateFrom(candidates, key);
+				free.release(geometry.x, geometry.y, geometry.slotW, geometry.slotH);
+				allocateFrom(free, key);
 				evict(victim, releasedPages);
 				if (needed.contains(victim)) {
 					// Still wanted, but farther than the sprite taking its slot: queue it behind nearer ones
@@ -1068,7 +1035,7 @@ public final class NearAtlas implements AutoCloseable {
 			return;
 		}
 		if (activeRefreshTicks-- <= 0) {
-			activeRefreshTicks = waitingForSlot.isEmpty() || isHybrid() ? 3 : 1;
+			activeRefreshTicks = waitingForSlot.isEmpty() ? 3 : 1;
 			boolean recording = LodPerformanceStats.isRecording();
 			long start = recording ? System.nanoTime() : 0;
 			refreshSprites();
@@ -1261,8 +1228,7 @@ public final class NearAtlas implements AutoCloseable {
 		return List.of(
 			"Near sparse atlas" + (isHybrid() ? " (experimental hybrid)" : "") + ": "
 				+ residentSprites + " sprites resident, " + (jobs.size() + incoming.size() + compactPending.size() + retryIncoming.size())
-				+ " pending, " + evictedSprites + " evicted, " + failedSprites + " failed, "
-				+ waitingForSlot.size() + " waiting for a slot",
+				+ " pending, " + evictedSprites + " evicted, " + failedSprites + " failed, " + waitingForSlot.size() + " waiting for a slot",
 			"Near animation: " + activeSprites.size() + " sprites active, " + uploadsPerSecond + " uploads/s, backlog avg "
 				+ String.format(java.util.Locale.ROOT, "%.0f", averageBacklog) + " peak " + displayedPeak,
 			"Near committed VRAM: " + String.format(java.util.Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024.0))
@@ -1515,10 +1481,7 @@ public final class NearAtlas implements AutoCloseable {
 			return null;
 		}
 		if (!compact) {
-			return new Geometry(
-				sprite.getX(), sprite.getY(), w, h, padX, padY,
-				sprite.getX(), sprite.getY(), 0, 0, false
-			);
+			return new Geometry(sprite.getX(), sprite.getY(), w, h, padX, padY, sprite.getX(), sprite.getY(), 0, 0);
 		}
 		if (sprite.getX() % cell != 0 || sprite.getY() % cell != 0) {
 			if (!misalignedLogged) {
@@ -1530,8 +1493,7 @@ public final class NearAtlas implements AutoCloseable {
 		}
 		int slotW = Math.ceilDiv(w + 2 * padX, cell) * cell;
 		int slotH = Math.ceilDiv(h + 2 * padY, cell) * cell;
-		boolean compatibility = isHybrid() && isCompatibilitySprite(sprite);
-		int[] slot = allocateSlot(compatibility, slotW, slotH);
+		int[] slot = allocateSlot(slotW, slotH);
 		if (slot == null) {
 			slotsFull = true;
 			if (!overflowLogged) {
@@ -1543,10 +1505,7 @@ public final class NearAtlas implements AutoCloseable {
 			}
 			return null;
 		}
-		return new Geometry(
-			slot[0], slot[1], w, h, padX, padY,
-			sprite.getX(), sprite.getY(), slotW, slotH, compatibility
-		);
+		return new Geometry(slot[0], slot[1], w, h, padX, padY, sprite.getX(), sprite.getY(), slotW, slotH);
 	}
 
 	private List<LevelData> albedoLevels(TextureAtlasSprite sprite, Geometry geometry, int frameIndex) {
@@ -1836,19 +1795,13 @@ public final class NearAtlas implements AutoCloseable {
 	}
 
 	private record Geometry(
-		int x, int y, int width, int height, int padX, int padY, int bigX, int bigY,
-		int slotW, int slotH, boolean compatibility
+		int x, int y, int width, int height, int padX, int padY, int bigX, int bigY, int slotW, int slotH
 	) {
 	}
 
 	private record LevelData(int level, int x, int y, int width, int height, int[] argb) {
 	}
 
-	private record Job(
-		TextureAtlasSprite sprite,
-		Geometry geometry,
-		List<LevelData> albedo,
-		Future<List<List<LevelData>>> pbr
-	) {
+	private record Job(TextureAtlasSprite sprite, Geometry geometry, List<LevelData> albedo, Future<List<List<LevelData>>> pbr) {
 	}
 }
