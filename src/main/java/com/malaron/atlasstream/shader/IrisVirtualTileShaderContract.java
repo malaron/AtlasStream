@@ -82,6 +82,7 @@ vec4 atlasStreamSampleVirtualSpecular(vec2 displayUv, vec2 originalUv, float bia
 vec2 atlasStreamOriginalUvFromDisplay(
     vec2 baseOriginalUv,
     vec2 displayUv,
+    vec2 baseDisplayUv,
     out vec2 derivativeScale
 ) {
     vec4 metadata = texelFetch(u_AtlasStreamVirtualMetadata, ivec2(0), 0);
@@ -115,10 +116,9 @@ vec2 atlasStreamOriginalUvFromDisplay(
                     floor(entry.b * 255.0 + 0.5)
                         + mod(floor(entry.a * 255.0 + 0.5), 128.0) * 256.0 - 4096.0
                 );
-                vec2 original = (
-                    displayUv * compactSize - delta * cell
-                ) / (vec2(nearRemapSize.x, rows) * cell);
                 derivativeScale = compactSize / (vec2(nearRemapSize.x, rows) * cell);
+                vec2 original = baseOriginalUv
+                    + (displayUv - baseDisplayUv) * derivativeScale;
                 return original;
             }
         }
@@ -171,9 +171,9 @@ vec2 atlasStreamOriginalUvFromDisplay(
                 );
                 float factor = exp2(float(encodedFactor - 1));
                 derivativeScale = destinationSize * factor / sourceSize;
-                return (
-                    sourceOrigin + (displayUv * destinationSize - destinationOrigin) * factor
-                ) / sourceSize;
+                return baseOriginalUv
+                    + (displayUv - baseDisplayUv) * factor
+                    * destinationSize / sourceSize;
             }
         }
     }
@@ -190,7 +190,7 @@ vec4 atlasStreamSampleParallax(
 ) {
     vec2 derivativeScale;
     vec2 parallaxOriginalUv = atlasStreamOriginalUvFromDisplay(
-        originalUv, displayUv, derivativeScale
+        originalUv, displayUv, baseDisplayUv, derivativeScale
     );
     vec2 cacheUv = atlasStreamVirtualCacheUv(parallaxOriginalUv, cacheTexture);
     if (cacheUv.x < 0.0) {
