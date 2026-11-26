@@ -45,6 +45,8 @@ public final class LodPerformanceStats {
 	private static long tileResident;
 	private static long tileLoading;
 	private static long tileAdmissionBlocked;
+	private static long tileNearAdmissionBlocked;
+	private static double tileNearestBlockedDistance = Double.POSITIVE_INFINITY;
 	private static long tileQueueRejected;
 	private static long tileQueued;
 	private static long tileBuilt;
@@ -95,6 +97,8 @@ public final class LodPerformanceStats {
 		tileResident = 0;
 		tileLoading = 0;
 		tileAdmissionBlocked = 0;
+		tileNearAdmissionBlocked = 0;
+		tileNearestBlockedDistance = Double.POSITIVE_INFINITY;
 		tileQueueRejected = 0;
 		tileQueued = 0;
 		tileBuilt = 0;
@@ -258,9 +262,13 @@ public final class LodPerformanceStats {
 		}
 	}
 
-	public static synchronized void recordTileAdmissionBlocked() {
+	public static synchronized void recordTileAdmissionBlocked(double distance, double nearDistance) {
 		if (recording) {
 			tileAdmissionBlocked++;
+			tileNearestBlockedDistance = Math.min(tileNearestBlockedDistance, distance);
+			if (distance <= nearDistance) {
+				tileNearAdmissionBlocked++;
+			}
 		}
 	}
 
@@ -311,8 +319,9 @@ public final class LodPerformanceStats {
 		lines.add(String.format(
 			Locale.ROOT,
 			"Virtual tile lifecycle: %d requested, %d resident, %d loading, %d blocked, "
-				+ "%d queue-rejected, %d queued, %d built, %d uploaded",
-			tileRequested, tileResident, tileLoading, tileAdmissionBlocked, tileQueueRejected,
+				+ "%d blocked-near (nearest %.1f blocks), %d queue-rejected, %d queued, %d built, %d uploaded",
+			tileRequested, tileResident, tileLoading, tileAdmissionBlocked, tileNearAdmissionBlocked,
+			Double.isFinite(tileNearestBlockedDistance) ? tileNearestBlockedDistance : -1.0, tileQueueRejected,
 			tileQueued, tileBuilt, tileUploaded
 		));
 		for (SectionLod lod : SectionLod.values()) {

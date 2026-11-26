@@ -1445,7 +1445,10 @@ public final class AtlasRuntimeState {
 								));
 							}
 						} else if (!cache.canAdmit(key, activeVirtualTextureDistanceSquared)) {
-							LodPerformanceStats.recordTileAdmissionBlocked();
+							LodPerformanceStats.recordTileAdmissionBlocked(
+								Math.sqrt(activeVirtualTextureDistanceSquared),
+								AtlasStreamClient.getConfig().highResolutionDistance()
+							);
 						} else if (pendingVirtualTextureTiles.offer(key, activeVirtualTextureDistanceSquared)) {
 							LodPerformanceStats.recordTileQueued();
 						} else {
