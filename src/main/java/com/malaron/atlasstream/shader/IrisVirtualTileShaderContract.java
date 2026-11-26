@@ -112,8 +112,7 @@ float atlasStreamVirtualPixelScale(vec2 originalUv) {
                 u_AtlasStreamLowRemap, ivec2(coordinate.x * 3 + 2, coordinate.y), 0
             );
             int encodedFactor = int(floor(factorEntry.r * 255.0 + 0.5));
-            scale = vec2(textureSize(gtexture, 0)) / originalSize;
-            scale *= exp2(float(max(encodedFactor - 1, 0)));
+            scale = vec2(exp2(float(max(encodedFactor - 1, 0))));
         }
     }
     return max(scale.x, scale.y);
@@ -179,7 +178,7 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 	}
 
 	public static String patchSodiumAlbedoFragment(String source) {
-		return patchSodiumAlbedoFragment(source, false);
+		return patchSodiumAlbedoFragment(source, true);
 	}
 
 	public static String patchSodiumAlbedoFragment(String source, boolean parallax) {
