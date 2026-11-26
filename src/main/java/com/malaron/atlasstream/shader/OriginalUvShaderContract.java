@@ -55,4 +55,19 @@ public final class OriginalUvShaderContract {
 			+ "\nin vec2 " + ORIGINAL_UV_OUT + ";"
 			+ source.substring(uv.end());
 	}
+
+	public static String patchSodiumFragment(String source) {
+		if (IN_DECLARATION.matcher(source).find()) {
+			return source;
+		}
+		int version = source.indexOf("#version");
+		int insertion = 0;
+		if (version >= 0) {
+			int newline = source.indexOf('\n', version);
+			insertion = newline < 0 ? source.length() : newline + 1;
+		}
+		return source.substring(0, insertion)
+			+ "in vec2 atlasStream_OriginalUv;\n"
+			+ source.substring(insertion);
+	}
 }

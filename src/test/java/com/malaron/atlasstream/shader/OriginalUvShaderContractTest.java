@@ -7,6 +7,20 @@ import org.junit.jupiter.api.Test;
 
 class OriginalUvShaderContractTest {
 	@Test
+	void addsSodiumFragmentInputWithoutIrisUvVarying() {
+		String fragment = """
+			#version 330
+			layout(location = 0) out vec4 sceneAlbedo;
+			void main() {}
+			""";
+
+		String patched = OriginalUvShaderContract.patchSodiumFragment(fragment);
+
+		assertTrue(patched.contains("in vec2 atlasStream_OriginalUv;"));
+		assertEquals(patched, OriginalUvShaderContract.patchSodiumFragment(patched));
+	}
+
+	@Test
 	void vertexExportsUnmodifiedUvBeforeDisplayRemap() {
 		String source = """
 			in vec2 iris_UV0;
