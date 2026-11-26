@@ -475,6 +475,8 @@ public final class AtlasRuntimeState {
 					AtlasStream.LOGGER.info(
 						"Iris PBR uses the fixed virtual tile cache; the sparse near atlas is disabled"
 					);
+					setBuildPhase("Atlas ready");
+					clearBuildPhase();
 				} else {
 					setBuildPhase("Atlas ready");
 					clearBuildPhase();
