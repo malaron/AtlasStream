@@ -448,9 +448,7 @@ public final class AtlasRuntimeState {
 					net.minecraft.network.chat.Component.literal(
 						(enableDistancePreview
 							? SodiumTerrainIntegration.isIrisShaderPackInUse()
-								? (isNearAtlasActive()
-									? "Distance-based LOD enabled with Iris; nearby terrain uses the near atlas where available. "
-									: "Distance-based LOD enabled with Iris; the near atlas is unavailable, so terrain uses the reduced atlas. ")
+								? "Distance-based LOD enabled with Iris; terrain uses the fixed PBR tile cache with the reduced atlas as fallback. "
 								: "Streamed albedo LOD enabled. Nearby terrain uses the bounded high-resolution tile cache, and the low atlas is the fallback. "
 							: "Separate low-resolution block atlas enabled. Run /atlasstream preview-high to switch back. ")
 							+ "Low atlas is " + lowResolutionTexture.getWidth(0) + "x"
@@ -468,6 +466,15 @@ public final class AtlasRuntimeState {
 				} else if (!enableDistancePreview) {
 					setBuildPhase("Low-resolution atlas ready");
 					clearBuildPhase();
+				} else if (image.pbrImages() != null) {
+					if (nearAtlas != null) {
+						nearAtlas.close();
+						nearAtlas = null;
+					}
+					nearAtlasUnavailable = true;
+					AtlasStream.LOGGER.info(
+						"Iris PBR uses the fixed virtual tile cache; the sparse near atlas is disabled"
+					);
 				} else {
 					setBuildPhase("Atlas ready");
 					clearBuildPhase();
@@ -3076,7 +3083,7 @@ public final class AtlasRuntimeState {
 					: image.pbrImages() != null
 						? IrisPbrAtlasReducer.detachHolder(highResolutionTexture)
 						: null;
-				if (image.pbrImages() != null) {
+				if (image.pbrImages() != null && !SodiumTerrainIntegration.isIrisShaderPackInUse()) {
 					NearAtlas created = NearAtlas.create(
 						atlasWidth,
 						atlasHeight,
