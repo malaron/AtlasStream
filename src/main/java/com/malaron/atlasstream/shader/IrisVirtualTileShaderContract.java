@@ -166,6 +166,14 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 	private IrisVirtualTileShaderContract() {
 	}
 
+	public static int directSampleCount(String source) {
+		return (int) DIRECT_PBR_SAMPLE.matcher(source).results().count();
+	}
+
+	public static int parallaxSampleCount(String source) {
+		return (int) PARALLAX_PBR_SAMPLE.matcher(source).results().count();
+	}
+
 	public static String patchFragment(String source) {
 		java.util.regex.Matcher originalUv = ORIGINAL_UV.matcher(source);
 		if (!originalUv.find() || source.contains("u_AtlasStreamVirtualPageTable")

@@ -114,6 +114,7 @@ vec2 atlasStreamLowRemap(vec2 uv) {
 	private static boolean logged;
 	private static boolean midLogged;
 	private static boolean vanillaLogged;
+	private static boolean virtualContractLogged;
 	private static final java.util.regex.Pattern UV0_DECLARATION = java.util.regex.Pattern.compile(
 		"in\\s+vec2\\s+iris_UV0\\s*;"
 	);
@@ -257,6 +258,20 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 			String original = entry.getValue();
 			String fragment = OriginalUvShaderContract.patchFragment(original);
 			fragment = IrisVirtualTileShaderContract.patchFragment(fragment);
+			if (!virtualContractLogged && original.contains("sceneAlbedo")) {
+				virtualContractLogged = true;
+				AtlasStream.LOGGER.info(
+					"Iris virtual shader contract: originalUvIn={}, directSamples={}/{}, "
+						+ "parallaxSamples={}/{}, samplerDeclared={}",
+					original.contains("atlasStream_OriginalUv")
+						|| fragment.contains("atlasStream_OriginalUv"),
+					IrisVirtualTileShaderContract.directSampleCount(original),
+					IrisVirtualTileShaderContract.directSampleCount(fragment),
+					IrisVirtualTileShaderContract.parallaxSampleCount(original),
+					IrisVirtualTileShaderContract.parallaxSampleCount(fragment),
+					fragment.contains("u_AtlasStreamVirtualPageTable")
+				);
+			}
 			if (!fragment.equals(original)) {
 				entry.setValue(fragment);
 				changed = true;
