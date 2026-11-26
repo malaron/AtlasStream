@@ -200,6 +200,18 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 		);
 	}
 
+	public static String patchSodiumFinalPbrPomFragment(String source) {
+		return patchFragment(
+			OriginalUvShaderContract.patchSodiumFragment(source),
+			true,
+			true,
+			true,
+			true,
+			true,
+			true
+		);
+	}
+
 	public static String patchSodiumNormalFragment(String source, boolean parallaxNormal) {
 		return patchFragment(
 			OriginalUvShaderContract.patchSodiumFragment(source),
