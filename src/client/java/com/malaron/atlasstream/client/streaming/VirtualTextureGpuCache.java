@@ -21,8 +21,13 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 	private final int mipLevelCount;
 	private final int gridWidth;
 	private final int gridHeight;
+	private final boolean pbrBundle;
 	private GpuTexture texture;
+	private GpuTexture normalTexture;
+	private GpuTexture specularTexture;
 	private GpuTextureView textureView;
+	private GpuTextureView normalTextureView;
+	private GpuTextureView specularTextureView;
 	private final Queue<Integer> freeSlots = new ArrayDeque<>();
 	private final ByteLruCache<VirtualTextureTileKey, ResidentTile> residentTiles;
 	private final VirtualTextureResidencyPriority priority = new VirtualTextureResidencyPriority();
@@ -38,6 +43,16 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 		int mipLevelCount,
 		long budgetBytes
 	) {
+		this(pageTable, tileTextureSize, mipLevelCount, budgetBytes, false);
+	}
+
+	public VirtualTextureGpuCache(
+		VirtualTextureGpuPageTable pageTable,
+		int tileTextureSize,
+		int mipLevelCount,
+		long budgetBytes,
+		boolean pbrBundle
+	) {
 		if (tileTextureSize <= 0 || mipLevelCount <= 0 || budgetBytes <= 0) {
 			throw new IllegalArgumentException("Tile texture size, mip level count, and GPU budget must be positive");
 		}
@@ -47,13 +62,14 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 		this.pageTable = pageTable;
 		this.tileTextureSize = tileTextureSize;
 		this.mipLevelCount = mipLevelCount;
-		this.bytesPerTile = calculateTileBytes(tileTextureSize, mipLevelCount);
+		this.pbrBundle = pbrBundle;
+		this.bytesPerTile = calculateTileBytes(tileTextureSize, mipLevelCount) * (pbrBundle ? 3 : 1);
 		int maximumTextureSize = RenderSystem.getDevice()
 			.getDeviceInfo()
 			.limits()
 			.maxTextureSizeForFormat(GpuFormat.RGBA8_UNORM);
 		FixedVirtualTextureCachePlan plan = FixedVirtualTextureCachePlan.create(
-			tileTextureSize, mipLevelCount, budgetBytes, maximumTextureSize, false
+			tileTextureSize, mipLevelCount, budgetBytes, maximumTextureSize, pbrBundle
 		);
 		this.gridWidth = plan.gridWidth();
 		this.gridHeight = plan.gridHeight();
@@ -78,18 +94,34 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 			1,
 			mipLevelCount
 		);
+		GpuTexture createdNormalTexture = null;
+		GpuTexture createdSpecularTexture = null;
 		GpuTextureView createdView = null;
+		GpuTextureView createdNormalView = null;
+		GpuTextureView createdSpecularView = null;
 		try {
 			createdView = RenderSystem.getDevice().createTextureView(createdTexture);
-		} catch (RuntimeException | Error exception) {
-			if (createdView != null) {
-				createdView.close();
+			if (pbrBundle) {
+				createdNormalTexture = createCacheTexture("normal", textureWidth, textureHeight, mipLevelCount);
+				createdSpecularTexture = createCacheTexture("specular", textureWidth, textureHeight, mipLevelCount);
+				createdNormalView = RenderSystem.getDevice().createTextureView(createdNormalTexture);
+				createdSpecularView = RenderSystem.getDevice().createTextureView(createdSpecularTexture);
 			}
+		} catch (RuntimeException | Error exception) {
+			closeQuietly(createdView);
+			closeQuietly(createdNormalView);
+			closeQuietly(createdSpecularView);
+			closeQuietly(createdNormalTexture);
+			closeQuietly(createdSpecularTexture);
 			createdTexture.close();
 			throw exception;
 		}
 		this.texture = createdTexture;
+		this.normalTexture = createdNormalTexture;
+		this.specularTexture = createdSpecularTexture;
 		this.textureView = createdView;
+		this.normalTextureView = createdNormalView;
+		this.specularTextureView = createdSpecularView;
 		this.capacityBytes = allocationBytes;
 		for (int slot = 0; slot < slotCount; slot++) {
 			freeSlots.add(slot);
@@ -102,6 +134,22 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 	}
 
 	public synchronized int upload(VirtualTextureTileKey key, List<NativeImage> mipLevels, double distanceSquared) {
+		return upload(
+			key,
+			mipLevels,
+			pbrBundle ? mipLevels : null,
+			pbrBundle ? mipLevels : null,
+			distanceSquared
+		);
+	}
+
+	public synchronized int upload(
+		VirtualTextureTileKey key,
+		List<NativeImage> albedo,
+		List<NativeImage> normal,
+		List<NativeImage> specular,
+		double distanceSquared
+	) {
 		ensureOpen();
 		ResidentTile existing = residentTiles.get(key);
 		if (existing != null) {
@@ -111,10 +159,16 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 			throw new IllegalArgumentException("Tile key mip level is outside its page table");
 		}
 		pageTable.layout().encodedLayer(key);
-		if (mipLevels.size() != mipLevelCount) {
+		if (albedo.size() != mipLevelCount
+				|| (pbrBundle && (normal.size() != mipLevelCount || specular.size() != mipLevelCount))
+				|| (!pbrBundle && (normal != null || specular != null))) {
 			throw new IllegalArgumentException("Tile upload must include the complete cache mip chain");
 		}
-		long weight = validateMipChain(mipLevels);
+		long weight = validateMipChain(albedo);
+		if (pbrBundle) {
+			weight = Math.addExact(weight, validateMipChain(normal));
+			weight = Math.addExact(weight, validateMipChain(specular));
+		}
 		if (weight > residentTiles.maximumBytes()) {
 			throw new IllegalArgumentException("Virtual texture tile exceeds the configured cache budget");
 		}
@@ -133,16 +187,24 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 		boolean uploaded = false;
 		try {
 			var encoder = RenderSystem.getDevice().createCommandEncoder();
-			for (int mip = 0; mip < mipLevels.size(); mip++) {
+			for (int mip = 0; mip < albedo.size(); mip++) {
 				int mipTileSize = Math.max(1, tileTextureSize >> mip);
 				encoder.writeToTexture(
 					texture,
-					mipLevels.get(mip),
+					albedo.get(mip),
 					mip,
 					0,
 					slotX * mipTileSize,
 					slotY * mipTileSize
 				);
+				if (pbrBundle) {
+					encoder.writeToTexture(
+						normalTexture, normal.get(mip), mip, 0, slotX * mipTileSize, slotY * mipTileSize
+					);
+					encoder.writeToTexture(
+						specularTexture, specular.get(mip), mip, 0, slotX * mipTileSize, slotY * mipTileSize
+					);
+				}
 			}
 			encoder.submit();
 			pageTable.setResident(key, slot);
@@ -214,6 +276,22 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 		return textureView;
 	}
 
+	public synchronized GpuTextureView normalTextureView() {
+		ensureOpen();
+		if (!pbrBundle) {
+			throw new IllegalStateException("Virtual texture GPU cache was not allocated with PBR surfaces");
+		}
+		return normalTextureView;
+	}
+
+	public synchronized GpuTextureView specularTextureView() {
+		ensureOpen();
+		if (!pbrBundle) {
+			throw new IllegalStateException("Virtual texture GPU cache was not allocated with PBR surfaces");
+		}
+		return specularTextureView;
+	}
+
 	public int gridWidth() {
 		return gridWidth;
 	}
@@ -249,11 +327,19 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 			}
 		} finally {
 			try {
-				textureView.close();
+				closeQuietly(textureView);
+				closeQuietly(normalTextureView);
+				closeQuietly(specularTextureView);
 			} finally {
 				texture.close();
+				closeQuietly(normalTexture);
+				closeQuietly(specularTexture);
 				textureView = null;
+				normalTextureView = null;
+				specularTextureView = null;
 				texture = null;
+				normalTexture = null;
+				specularTexture = null;
 			}
 		}
 	}
@@ -294,6 +380,35 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 			totalBytes = Math.addExact(totalBytes, Math.multiplyExact(size * size, 4));
 		}
 		return totalBytes;
+	}
+
+	private static GpuTexture createCacheTexture(
+		String label,
+		int width,
+		int height,
+		int mipLevelCount
+	) {
+		return RenderSystem.getDevice().createTexture(
+			"AtlasStream streamed high-resolution " + label + " tile cache",
+			GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING,
+			GpuFormat.RGBA8_UNORM,
+			width,
+			height,
+			1,
+			mipLevelCount
+		);
+	}
+
+	private static void closeQuietly(GpuTextureView resource) {
+		if (resource != null) {
+			resource.close();
+		}
+	}
+
+	private static void closeQuietly(GpuTexture resource) {
+		if (resource != null) {
+			resource.close();
+		}
 	}
 
 	private record ResidentTile(VirtualTextureTileKey key, int slot) {
