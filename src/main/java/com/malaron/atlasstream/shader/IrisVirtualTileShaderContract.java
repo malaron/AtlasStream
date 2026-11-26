@@ -9,6 +9,9 @@ public final class IrisVirtualTileShaderContract {
 	private static final Pattern DIRECT_PBR_SAMPLE = Pattern.compile(
 		"\\btexture\\s*\\(\\s*(gtexture|normals|specular)\\s*,\\s*([^,\\n]+)\\s*,\\s*([^\\)\\n]+)\\s*\\)"
 	);
+	private static final Pattern PARALLAX_PBR_SAMPLE = Pattern.compile(
+		"\\btextureParallax\\s*\\(\\s*(gtexture|normals|specular)\\s*,\\s*([^,\\n]+)\\s*,\\s*([^\\)\\n]+)\\s*\\)"
+	);
 	private static final String DECLARATIONS = """
 
 uniform sampler2D u_AtlasStreamVirtualAlbedo;
@@ -75,6 +78,89 @@ vec4 atlasStreamSampleVirtualSpecular(vec2 displayUv, vec2 originalUv, float bia
         ? texture(specular, displayUv, bias)
         : texture(u_AtlasStreamVirtualSpecular, cacheUv, bias);
 }
+
+float atlasStreamVirtualPixelScale(vec2 originalUv) {
+    vec4 metadata = texelFetch(u_AtlasStreamVirtualMetadata, ivec2(0), 0);
+    vec2 originalSize = vec2(
+        floor(metadata.r * 255.0 + 0.5) + floor(metadata.g * 255.0 + 0.5) * 256.0 + 1.0,
+        floor(metadata.b * 255.0 + 0.5) + floor(metadata.a * 255.0 + 0.5) * 256.0 + 1.0
+    );
+    ivec2 remapSize = textureSize(u_AtlasStreamLowRemap, 0);
+    vec2 scale = vec2(textureSize(gtexture, 0)) / originalSize;
+    if (remapSize.x > 3) {
+        int headerY = remapSize.y - 1;
+        vec4 destinationHeader = texelFetch(u_AtlasStreamLowRemap, ivec2(0, headerY), 0);
+        ivec2 destinationSize = ivec2(
+            floor(destinationHeader.r * 255.0 + 0.5) + floor(destinationHeader.g * 255.0 + 0.5) * 256.0 + 1.0,
+            floor(destinationHeader.b * 255.0 + 0.5) + floor(destinationHeader.a * 255.0 + 0.5) * 256.0 + 1.0
+        );
+        if (textureSize(gtexture, 0) == destinationSize) {
+            vec4 sourceHeader = texelFetch(u_AtlasStreamLowRemap, ivec2(1, headerY), 0);
+            vec4 gridHeader = texelFetch(u_AtlasStreamLowRemap, ivec2(2, headerY), 0);
+            vec2 sourceSize = vec2(
+                floor(sourceHeader.r * 255.0 + 0.5) + floor(sourceHeader.g * 255.0 + 0.5) * 256.0,
+                floor(sourceHeader.b * 255.0 + 0.5) + floor(sourceHeader.a * 255.0 + 0.5) * 256.0
+            ) + 1.0;
+            float cell = floor(gridHeader.r * 255.0 + 0.5)
+                + floor(gridHeader.g * 255.0 + 0.5) * 256.0;
+            ivec2 coordinate = clamp(
+                ivec2(floor(originalUv * sourceSize / cell)),
+                ivec2(0),
+                ivec2(remapSize.x / 3 - 1, remapSize.y - 2)
+            );
+            vec4 factorEntry = texelFetch(
+                u_AtlasStreamLowRemap, ivec2(coordinate.x * 3 + 2, coordinate.y), 0
+            );
+            int encodedFactor = int(floor(factorEntry.r * 255.0 + 0.5));
+            scale = vec2(textureSize(gtexture, 0)) / originalSize;
+            scale *= exp2(float(max(encodedFactor - 1, 0)));
+        }
+    }
+    return max(scale.x, scale.y);
+}
+
+vec4 atlasStreamSampleParallax(
+    sampler2D fallbackTexture,
+    sampler2D cacheTexture,
+    vec2 displayUv,
+    vec2 baseDisplayUv,
+    vec2 originalUv,
+    mat2 derivatives
+) {
+    vec2 parallaxOriginalUv = originalUv
+        + (displayUv - baseDisplayUv) * atlasStreamVirtualPixelScale(originalUv);
+    vec2 cacheUv = atlasStreamVirtualCacheUv(parallaxOriginalUv, cacheTexture);
+    if (cacheUv.x < 0.0) {
+        return textureGrad(fallbackTexture, displayUv, derivatives[0], derivatives[1]);
+    }
+    vec2 derivativeScale = vec2(textureSize(fallbackTexture, 0))
+        / vec2(textureSize(cacheTexture, 0));
+    derivativeScale *= atlasStreamVirtualPixelScale(originalUv);
+    return textureGrad(
+        cacheTexture,
+        cacheUv,
+        derivatives[0] * derivativeScale,
+        derivatives[1] * derivativeScale
+    );
+}
+
+vec4 atlasStreamSampleParallaxGtexture(vec2 uv, vec2 baseUv, vec2 originalUv, mat2 derivatives) {
+    return atlasStreamSampleParallax(
+        gtexture, u_AtlasStreamVirtualAlbedo, uv, baseUv, originalUv, derivatives
+    );
+}
+
+vec4 atlasStreamSampleParallaxNormals(vec2 uv, vec2 baseUv, vec2 originalUv, mat2 derivatives) {
+    return atlasStreamSampleParallax(
+        normals, u_AtlasStreamVirtualNormal, uv, baseUv, originalUv, derivatives
+    );
+}
+
+vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, mat2 derivatives) {
+    return atlasStreamSampleParallax(
+        specular, u_AtlasStreamVirtualSpecular, uv, baseUv, originalUv, derivatives
+    );
+}
 """;
 
 	private IrisVirtualTileShaderContract() {
@@ -85,7 +171,18 @@ vec4 atlasStreamSampleVirtualSpecular(vec2 displayUv, vec2 originalUv, float bia
 		if (!originalUv.find() || source.contains("u_AtlasStreamVirtualPageTable")) {
 			return source;
 		}
-		String patchedSamples = DIRECT_PBR_SAMPLE.matcher(source).replaceAll(match -> {
+		String patchedSamples = PARALLAX_PBR_SAMPLE.matcher(source).replaceAll(match -> {
+			String sampler = match.group(1);
+			String function = switch (sampler) {
+				case "gtexture" -> "atlasStreamSampleParallaxGtexture";
+				case "normals" -> "atlasStreamSampleParallaxNormals";
+				case "specular" -> "atlasStreamSampleParallaxSpecular";
+				default -> throw new IllegalStateException("Unexpected sampler " + sampler);
+			};
+			return function + "(" + match.group(2).trim() + ", uv[0], atlasStream_OriginalUv, "
+				+ match.group(3).trim() + ")";
+		});
+		patchedSamples = DIRECT_PBR_SAMPLE.matcher(patchedSamples).replaceAll(match -> {
 			String sampler = match.group(1);
 			String function = switch (sampler) {
 				case "gtexture" -> "atlasStreamSampleVirtualGtexture";

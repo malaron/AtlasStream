@@ -16,6 +16,9 @@ class IrisVirtualTileShaderContractTest {
 			    vec4 color = texture(gtexture, iris_UV0, MipBias);
 			    vec4 normal = texture(normals, iris_UV0, MipBias);
 			    vec4 properties = texture(specular, iris_UV0, MipBias);
+			    vec4 parallaxColor = textureParallax(gtexture, parallaxCoord.xy, dCoord);
+			    vec4 parallaxNormal = textureParallax(normals, parallaxCoord.xy, dCoord);
+			    vec4 parallaxSpecular = textureParallax(specular, parallaxCoord.xy, dCoord);
 			}
 			""";
 
@@ -34,6 +37,15 @@ class IrisVirtualTileShaderContractTest {
 		));
 		assertTrue(patched.contains(
 			"atlasStreamSampleVirtualSpecular(iris_UV0, atlasStream_OriginalUv, MipBias)"
+		));
+		assertTrue(patched.contains(
+			"atlasStreamSampleParallaxGtexture(parallaxCoord.xy, uv[0], atlasStream_OriginalUv, dCoord)"
+		));
+		assertTrue(patched.contains(
+			"atlasStreamSampleParallaxNormals(parallaxCoord.xy, uv[0], atlasStream_OriginalUv, dCoord)"
+		));
+		assertTrue(patched.contains(
+			"atlasStreamSampleParallaxSpecular(parallaxCoord.xy, uv[0], atlasStream_OriginalUv, dCoord)"
 		));
 		assertEquals(patched, IrisVirtualTileShaderContract.patchFragment(patched));
 	}
