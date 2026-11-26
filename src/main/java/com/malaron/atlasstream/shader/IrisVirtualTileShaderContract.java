@@ -161,7 +161,21 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 			true,
 			true,
 			true,
+			true,
+			true,
 			true
+		);
+	}
+
+	public static String patchSodiumNormalFragment(String source) {
+		return patchFragment(
+			OriginalUvShaderContract.patchSodiumFragment(source),
+			true,
+			true,
+			false,
+			true,
+			true,
+			false
 		);
 	}
 
@@ -171,12 +185,14 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 			true,
 			false,
 			false,
-			parallax
+			parallax,
+			false,
+			false
 		);
 	}
 
 	private static String patchFragment(String source, boolean albedo, boolean normal, boolean specular) {
-		return patchFragment(source, albedo, normal, specular, true);
+		return patchFragment(source, albedo, normal, specular, true, true, true);
 	}
 
 	private static String patchFragment(
@@ -184,7 +200,9 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 		boolean albedo,
 		boolean normal,
 		boolean specular,
-		boolean parallax
+		boolean parallaxAlbedo,
+		boolean parallaxNormal,
+		boolean parallaxSpecular
 	) {
 		java.util.regex.Matcher originalUv = ORIGINAL_UV.matcher(source);
 		if (!originalUv.find() || source.contains("u_AtlasStreamVirtualPageTable")
@@ -193,7 +211,7 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 		}
 		String patchedSamples = PARALLAX_PBR_SAMPLE.matcher(source).replaceAll(match -> {
 			String sampler = match.group(1);
-			if (!parallax || !enabledSampler(sampler, albedo, normal, specular)) {
+			if (!enabledSampler(sampler, parallaxAlbedo, parallaxNormal, parallaxSpecular)) {
 				return match.group();
 			}
 			String function = switch (sampler) {
