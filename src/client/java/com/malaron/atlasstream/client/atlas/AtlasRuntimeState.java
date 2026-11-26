@@ -1225,7 +1225,9 @@ public final class AtlasRuntimeState {
 			NativeTileBundle images = null;
 			try {
 				images = entry.getValue().images().get();
-				if (cache.update(entry.getKey(), images.albedo())) {
+				if (cache.update(
+						entry.getKey(), images.albedo(), images.normal(), images.specular()
+				)) {
 					animatedTiles.put(entry.getKey(), entry.getValue().snapshot());
 					uploads++;
 				}
@@ -1312,7 +1314,7 @@ public final class AtlasRuntimeState {
 		);
 		try (NativeTileBundle images = buildTileBundle(key, cacheMipLevels)) {
 			if (replace) {
-				cache.update(key, images.albedo());
+				cache.update(key, images.albedo(), images.normal(), images.specular());
 				return -1;
 			}
 			return cache.upload(key, images.albedo(), images.normal(), images.specular(), Double.POSITIVE_INFINITY);
@@ -1686,6 +1688,38 @@ public final class AtlasRuntimeState {
 		}
 		try {
 			return (Integer) texture.getClass().getMethod("iris$getGlId").invoke(texture);
+		} catch (ReflectiveOperationException | RuntimeException exception) {
+			return nearPlaceholderGlId();
+		}
+	}
+
+	public static int virtualAlbedoGlId() {
+		VirtualTextureGpuCache cache = virtualTextureGpuCache;
+		return cache != null && isDistancePreviewEnabled() ? cache.textureGlId() : nearPlaceholderGlId();
+	}
+
+	public static int virtualNormalGlId() {
+		VirtualTextureGpuCache cache = virtualTextureGpuCache;
+		return cache != null && isDistancePreviewEnabled() ? cache.normalTextureGlId() : nearPlaceholderGlId();
+	}
+
+	public static int virtualSpecularGlId() {
+		VirtualTextureGpuCache cache = virtualTextureGpuCache;
+		return cache != null && isDistancePreviewEnabled() ? cache.specularTextureGlId() : nearPlaceholderGlId();
+	}
+
+	public static int virtualPageTableGlId() {
+		VirtualTextureGpuPageTable pageTable = virtualTextureGpuPageTable;
+		return pageTable != null && isDistancePreviewEnabled() ? pageTable.glId() : nearPlaceholderGlId();
+	}
+
+	public static int virtualMetadataGlId() {
+		VirtualTextureMetadataTexture metadata = virtualTextureMetadataTexture;
+		if (metadata == null || !isDistancePreviewEnabled()) {
+			return nearPlaceholderGlId();
+		}
+		try {
+			return (Integer) metadata.texture().getClass().getMethod("iris$getGlId").invoke(metadata.texture());
 		} catch (ReflectiveOperationException | RuntimeException exception) {
 			return nearPlaceholderGlId();
 		}

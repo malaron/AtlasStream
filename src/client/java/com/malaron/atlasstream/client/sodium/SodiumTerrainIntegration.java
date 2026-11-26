@@ -261,6 +261,31 @@ public final class SodiumTerrainIntegration {
 					: AtlasRuntimeState.nearPlaceholderGlId();
 			};
 			method.invoke(samplerHolder, type, lowRemapId, sampler, new String[] {"u_AtlasStreamLowRemap"});
+			method.invoke(
+				samplerHolder, type,
+				(java.util.function.IntSupplier) AtlasRuntimeState::virtualAlbedoGlId,
+				sampler, new String[] {"u_AtlasStreamVirtualAlbedo"}
+			);
+			method.invoke(
+				samplerHolder, type,
+				(java.util.function.IntSupplier) AtlasRuntimeState::virtualNormalGlId,
+				sampler, new String[] {"u_AtlasStreamVirtualNormal"}
+			);
+			method.invoke(
+				samplerHolder, type,
+				(java.util.function.IntSupplier) AtlasRuntimeState::virtualSpecularGlId,
+				sampler, new String[] {"u_AtlasStreamVirtualSpecular"}
+			);
+			method.invoke(
+				samplerHolder, type,
+				(java.util.function.IntSupplier) AtlasRuntimeState::virtualPageTableGlId,
+				sampler, new String[] {"u_AtlasStreamVirtualPageTable"}
+			);
+			method.invoke(
+				samplerHolder, type,
+				(java.util.function.IntSupplier) AtlasRuntimeState::virtualMetadataGlId,
+				sampler, new String[] {"u_AtlasStreamVirtualMetadata"}
+			);
 		} catch (ReflectiveOperationException | RuntimeException exception) {
 			if (IRIS_PBR_LOOKUP_FAILURE_LOGGED.compareAndSet(false, true)) {
 				AtlasStream.LOGGER.error("Could not register the near remap sampler with Iris", exception);

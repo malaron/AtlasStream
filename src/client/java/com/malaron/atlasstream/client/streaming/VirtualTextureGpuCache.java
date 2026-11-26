@@ -134,13 +134,10 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 	}
 
 	public synchronized int upload(VirtualTextureTileKey key, List<NativeImage> mipLevels, double distanceSquared) {
-		return upload(
-			key,
-			mipLevels,
-			pbrBundle ? mipLevels : null,
-			pbrBundle ? mipLevels : null,
-			distanceSquared
-		);
+		if (pbrBundle) {
+			throw new IllegalStateException("PBR cache uploads must provide normal and specular mip chains");
+		}
+		return upload(key, mipLevels, null, null, distanceSquared);
 	}
 
 	public synchronized int upload(
@@ -221,21 +218,47 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 
 	// Rewrites the pixels of an already resident tile in place; the page table is unchanged.
 	public synchronized boolean update(VirtualTextureTileKey key, List<NativeImage> mipLevels) {
+		if (pbrBundle) {
+			throw new IllegalStateException("PBR cache updates must provide normal and specular mip chains");
+		}
+		return update(key, mipLevels, null, null);
+	}
+
+	public synchronized boolean update(
+		VirtualTextureTileKey key,
+		List<NativeImage> albedo,
+		List<NativeImage> normal,
+		List<NativeImage> specular
+	) {
 		ensureOpen();
 		ResidentTile existing = residentTiles.get(key);
 		if (existing == null) {
 			return false;
 		}
-		if (mipLevels.size() != mipLevelCount) {
+		if (albedo.size() != mipLevelCount
+				|| (pbrBundle && (normal.size() != mipLevelCount || specular.size() != mipLevelCount))
+				|| (!pbrBundle && (normal != null || specular != null))) {
 			throw new IllegalArgumentException("Tile upload must include the complete cache mip chain");
 		}
-		validateMipChain(mipLevels);
+		validateMipChain(albedo);
+		if (pbrBundle) {
+			validateMipChain(normal);
+			validateMipChain(specular);
+		}
 		int slotX = existing.slot() % gridWidth;
 		int slotY = existing.slot() / gridWidth;
 		var encoder = RenderSystem.getDevice().createCommandEncoder();
-		for (int mip = 0; mip < mipLevels.size(); mip++) {
+		for (int mip = 0; mip < albedo.size(); mip++) {
 			int mipTileSize = Math.max(1, tileTextureSize >> mip);
-			encoder.writeToTexture(texture, mipLevels.get(mip), mip, 0, slotX * mipTileSize, slotY * mipTileSize);
+			encoder.writeToTexture(texture, albedo.get(mip), mip, 0, slotX * mipTileSize, slotY * mipTileSize);
+			if (pbrBundle) {
+				encoder.writeToTexture(
+					normalTexture, normal.get(mip), mip, 0, slotX * mipTileSize, slotY * mipTileSize
+				);
+				encoder.writeToTexture(
+					specularTexture, specular.get(mip), mip, 0, slotX * mipTileSize, slotY * mipTileSize
+				);
+			}
 		}
 		encoder.submit();
 		return true;
@@ -290,6 +313,21 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 			throw new IllegalStateException("Virtual texture GPU cache was not allocated with PBR surfaces");
 		}
 		return specularTextureView;
+	}
+
+	public synchronized int textureGlId() {
+		ensureOpen();
+		return glId(texture);
+	}
+
+	public synchronized int normalTextureGlId() {
+		ensureOpen();
+		return glId(normalTexture);
+	}
+
+	public synchronized int specularTextureGlId() {
+		ensureOpen();
+		return glId(specularTexture);
 	}
 
 	public int gridWidth() {
@@ -408,6 +446,17 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 	private static void closeQuietly(GpuTexture resource) {
 		if (resource != null) {
 			resource.close();
+		}
+	}
+
+	private static int glId(GpuTexture texture) {
+		if (texture == null) {
+			return 0;
+		}
+		try {
+			return (Integer) texture.getClass().getMethod("iris$getGlId").invoke(texture);
+		} catch (ReflectiveOperationException | RuntimeException exception) {
+			throw new IllegalStateException("Could not resolve virtual tile cache texture id", exception);
 		}
 	}
 

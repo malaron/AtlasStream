@@ -67,6 +67,15 @@ public final class VirtualTextureGpuPageTable implements AutoCloseable {
 		return textureView;
 	}
 
+	public synchronized int glId() {
+		ensureOpen();
+		try {
+			return (Integer) texture.getClass().getMethod("iris$getGlId").invoke(texture);
+		} catch (ReflectiveOperationException | RuntimeException exception) {
+			throw new IllegalStateException("Could not resolve virtual page table texture id", exception);
+		}
+	}
+
 	public synchronized void setResident(VirtualTextureTileKey key, int arrayLayer) {
 		ensureOpen();
 		pageTable.setResident(key, arrayLayer);

@@ -5,6 +5,7 @@ import java.util.Map;
 
 import com.malaron.atlasstream.AtlasStream;
 import com.malaron.atlasstream.shader.OriginalUvShaderContract;
+import com.malaron.atlasstream.shader.IrisVirtualTileShaderContract;
 import com.malaron.atlasstream.shader.VanillaNearShaderPatcher;
 
 import org.spongepowered.asm.mixin.Mixin;
@@ -253,6 +254,7 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 			}
 			String original = entry.getValue();
 			String fragment = OriginalUvShaderContract.patchFragment(original);
+			fragment = IrisVirtualTileShaderContract.patchFragment(fragment);
 			if (!fragment.equals(original)) {
 				entry.setValue(fragment);
 				changed = true;
