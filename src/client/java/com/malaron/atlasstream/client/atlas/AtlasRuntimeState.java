@@ -714,12 +714,64 @@ public final class AtlasRuntimeState {
 		if (cache == null) {
 			return "Virtual texture cache unavailable";
 		}
+
 		return "cache=" + cache.size() + " tiles, " + cache.usedBytes() / 1024 + "/"
 			+ cache.capacityBytes() / 1024 + " KiB, evictions=" + cache.evictionCount()
 			+ ", pending tiles=" + pendingVirtualTextureTiles.size()
 			+ ", loading=" + loadingTiles.size()
 			+ ", pending quads=" + (VIRTUAL_TEXTURE_REQUEST_TRACKER.pendingCount() + pendingVirtualTextureQuads.pendingCount())
 			+ ", refresh counter=" + streamRerequestCounter;
+	}
+
+	public static synchronized List<String> virtualTextureTileProof(TextureAtlasSprite sprite) {
+		VirtualTextureGpuPageTable pageTable = virtualTextureGpuPageTable;
+		VirtualTextureGpuCache cache = virtualTextureGpuCache;
+		VirtualTextureLayout layout = virtualTextureLayout;
+		VirtualTextureTileBundleBuilder bundleBuilder = virtualTextureTileBundleBuilder;
+		if (pageTable == null || cache == null || layout == null || bundleBuilder == null) {
+			throw new IllegalStateException("Virtual texture proof resources are unavailable");
+		}
+		int atlasX = (int) ((sprite.getU0() + sprite.getU1()) * 0.5
+			* ((TextureAtlasAccessor) previewedAtlas).atlasStream$getWidth());
+		int atlasY = (int) ((sprite.getV0() + sprite.getV1()) * 0.5
+			* ((TextureAtlasAccessor) previewedAtlas).atlasStream$getHeight());
+		VirtualTextureTileKey key = layout.address(
+			generation, 0, atlasX / (double) ((TextureAtlasAccessor) previewedAtlas).atlasStream$getWidth(),
+			atlasY / (double) ((TextureAtlasAccessor) previewedAtlas).atlasStream$getHeight()
+		).key();
+		Integer slot = cache.get(key);
+		int localX = atlasX - key.tileX() * VIRTUAL_TILE_SIZE;
+		int localY = atlasY - key.tileY() * VIRTUAL_TILE_SIZE;
+		int expectedPage = pageTable.layout().pixelColorAt(
+			pageTable.layout().pixelX(key), pageTable.layout().pixelY(key)
+		);
+		int gpuPage = pageTable.debugReadPixel(key);
+		int[] gpuPixels = cache.debugReadResidentPixels(key, localX, localY);
+		var bundle = bundleBuilder.build(key, 1);
+		int expectedAlbedo = bundle.albedo().get(0).pixel(localX, localY);
+		int expectedNormal = bundle.normal().get(0).pixel(localX, localY);
+		int expectedSpecular = bundle.specular().get(0).pixel(localX, localY);
+		return List.of(
+			"sprite=" + sprite.contents().name() + " atlasPixel=" + atlasX + "," + atlasY
+				+ " key=" + key + " local=" + localX + "," + localY,
+			"slot cpu=" + slot + " page cpu=" + rgbaHex(expectedPage) + " gpu=" + rgbaHex(gpuPage)
+				+ " decodedGpu=" + decodePageSlot(gpuPage),
+			"pixels source a/n/s=" + rgbaHex(expectedAlbedo) + "/" + rgbaHex(expectedNormal)
+				+ "/" + rgbaHex(expectedSpecular)
+				+ " gpu a/n/s=" + (gpuPixels == null
+					? "not-resident"
+					: rgbaHex(gpuPixels[0]) + "/" + rgbaHex(gpuPixels[1]) + "/" + rgbaHex(gpuPixels[2]))
+		);
+	}
+
+	private static int decodePageSlot(int rgba) {
+		return (rgba >>> 16 & 0xFF)
+			| (rgba >>> 8 & 0xFF) << 8
+			| (rgba & 0xFF) << 16;
+	}
+
+	private static String rgbaHex(int value) {
+		return String.format(java.util.Locale.ROOT, "%08X", value);
 	}
 
 	public static long guiItemAtlasRevision() {

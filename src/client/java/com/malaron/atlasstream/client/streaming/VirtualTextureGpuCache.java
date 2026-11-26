@@ -14,6 +14,9 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.GpuFormat;
 import com.mojang.renderpearl.api.textures.GpuTexture;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL30;
+import org.lwjgl.system.MemoryUtil;
 
 public final class VirtualTextureGpuCache implements AutoCloseable {
 	private final VirtualTextureGpuPageTable pageTable;
@@ -330,6 +333,21 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 		return glId(specularTexture);
 	}
 
+	public synchronized int[] debugReadResidentPixels(VirtualTextureTileKey key, int localX, int localY) {
+		ensureOpen();
+		ResidentTile resident = residentTiles.get(key);
+		if (resident == null) {
+			return null;
+		}
+		int x = resident.slot() % gridWidth * tileTextureSize + localX;
+		int y = resident.slot() / gridWidth * tileTextureSize + localY;
+		int[] pixels = new int[3];
+		pixels[0] = readPixel(texture, x, y);
+		pixels[1] = pbrBundle ? readPixel(normalTexture, x, y) : 0;
+		pixels[2] = pbrBundle ? readPixel(specularTexture, x, y) : 0;
+		return pixels;
+	}
+
 	public int gridWidth() {
 		return gridWidth;
 	}
@@ -457,6 +475,35 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 			return (Integer) texture.getClass().getMethod("iris$getGlId").invoke(texture);
 		} catch (ReflectiveOperationException | RuntimeException exception) {
 			throw new IllegalStateException("Could not resolve virtual tile cache texture id", exception);
+		}
+	}
+
+	private static int readPixel(GpuTexture texture, int x, int y) {
+		int previousFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+		int framebuffer = GL30.glGenFramebuffers();
+		java.nio.ByteBuffer pixel = MemoryUtil.memAlloc(4);
+		try {
+			GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, framebuffer);
+			GL30.glFramebufferTexture2D(
+				GL30.GL_READ_FRAMEBUFFER,
+				GL30.GL_COLOR_ATTACHMENT0,
+				GL11.GL_TEXTURE_2D,
+				glId(texture),
+				0
+			);
+			if (GL30.glCheckFramebufferStatus(GL30.GL_READ_FRAMEBUFFER)
+					!= GL30.GL_FRAMEBUFFER_COMPLETE) {
+				throw new IllegalStateException("Virtual cache readback framebuffer is incomplete");
+			}
+			GL11.glReadPixels(x, y, 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixel);
+			return (pixel.get(3) & 0xFF) << 24
+				| (pixel.get(0) & 0xFF) << 16
+				| (pixel.get(1) & 0xFF) << 8
+				| (pixel.get(2) & 0xFF);
+		} finally {
+			MemoryUtil.memFree(pixel);
+			GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousFramebuffer);
+			GL30.glDeleteFramebuffers(framebuffer);
 		}
 	}
 
