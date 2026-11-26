@@ -37,6 +37,26 @@ class OriginalUvShaderContractTest {
 	}
 
 	@Test
+	void patchesSodiumTexcoordAtReturnSite() {
+		String source = """
+			vec2 _get_texcoord() {
+			    return vec2(a_TexCoord & TEXTURE_MAX_VALUE) / float(TEXTURE_MAX_COORD);
+			}
+			""";
+		String patched = OriginalUvShaderContract.patchSodiumVertex(
+			source,
+			"return vec2(a_TexCoord & TEXTURE_MAX_VALUE) / float(TEXTURE_MAX_COORD);"
+		);
+
+		assertTrue(patched.contains("atlasStream_OriginalUv = vec2("));
+		assertTrue(patched.contains("return atlasStreamTerrainRemap(atlasStream_OriginalUv);"));
+		assertEquals(patched, OriginalUvShaderContract.patchSodiumVertex(
+			patched,
+			"return vec2(a_TexCoord & TEXTURE_MAX_VALUE) / float(TEXTURE_MAX_COORD);"
+		));
+	}
+
+	@Test
 	void fragmentDeclaresMatchingOriginalUvVarying() {
 		String source = "in vec2 iris_UV0;\nvoid main() { vec2 uv = iris_UV0; }";
 		assertTrue(OriginalUvShaderContract.patchFragment(source)

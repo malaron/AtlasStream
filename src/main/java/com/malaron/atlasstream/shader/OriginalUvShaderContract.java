@@ -70,4 +70,14 @@ public final class OriginalUvShaderContract {
 			+ "in vec2 atlasStream_OriginalUv;\n"
 			+ source.substring(insertion);
 	}
+
+	public static String patchSodiumVertex(String source, String originalTexcoordReturn) {
+		String assignment =
+			"atlasStream_OriginalUv = vec2(a_TexCoord & TEXTURE_MAX_VALUE) / float(TEXTURE_MAX_COORD);"
+				+ " return atlasStreamTerrainRemap(atlasStream_OriginalUv);";
+		if (!source.contains(originalTexcoordReturn) || source.contains("atlasStream_OriginalUv = vec2(")) {
+			return source;
+		}
+		return source.replace(originalTexcoordReturn, assignment);
+	}
 }

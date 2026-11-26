@@ -226,11 +226,14 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 				+ "out vec2 atlasStream_OriginalUv;\n"
 				+ REMAP_FUNCTION + LOW_REMAP_FUNCTION + ATLAS_ONLY_FUNCTION;
 			String replaced = source.substring(0, function) + atlasFunctions + source.substring(function);
-			replaced = replaced.replace(
-				TEXCOORD_RETURN,
-				"atlasStream_OriginalUv = vec2(a_TexCoord & TEXTURE_MAX_VALUE) / float(TEXTURE_MAX_COORD);"
-					+ " return atlasStreamTerrainRemap(atlasStream_OriginalUv);"
-			);
+			replaced = OriginalUvShaderContract.patchSodiumVertex(replaced, TEXCOORD_RETURN);
+			if (!replaced.contains("atlasStream_OriginalUv = vec2(")) {
+				AtlasStream.LOGGER.error(
+					"Could not export Sodium original UV; texcoord source remains: {}",
+					shaderSnippet(replaced, TEXCOORD_RETURN)
+				);
+				continue;
+			}
 			// The sprite's mid coordinate is a separate attribute in layout space; packs compare it with the diffuse
 			// UV (for example to clamp to the sprite), so it has to move to the compact atlas as well.
 			int[] midCount = {0};
@@ -278,6 +281,7 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 				entry.setValue(fragment);
 				changed = true;
 			}
+
 		}
 		if (changed) {
 			if (!logged) {
@@ -286,5 +290,17 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 			}
 			callback.setReturnValue(patched);
 		}
+	}
+
+	private static String shaderSnippet(String source, String marker) {
+		int at = source.indexOf(marker);
+		if (at < 0) {
+			at = source.indexOf("_get_texcoord()");
+		}
+		if (at < 0) {
+			return "<marker absent>";
+		}
+		return source.substring(Math.max(0, at - 160), Math.min(source.length(), at + 320))
+			.replace('\n', ' ');
 	}
 }
