@@ -1432,15 +1432,23 @@ public final class AtlasRuntimeState {
 				LodPerformanceStats.recordTileRequested();
 				VirtualTextureGpuCache cache = virtualTextureGpuCache;
 				if (cache != null) {
-					if (!cache.noteDemand(key, activeVirtualTextureDistanceSquared)) {
+					if (cache.noteDemand(key, activeVirtualTextureDistanceSquared)) {
+						LodPerformanceStats.recordTileResident();
+					} else {
 						PreparedTile loading = loadingTiles.get(key);
-						if (loading != null && activeVirtualTextureDistanceSquared < loading.distanceSquared()) {
-							loadingTiles.put(key, new PreparedTile(
-								loading.snapshot(), loading.images(), activeVirtualTextureDistanceSquared
-							));
-						} else if (loading == null && cache.canAdmit(key, activeVirtualTextureDistanceSquared)) {
-							pendingVirtualTextureTiles.offer(key, activeVirtualTextureDistanceSquared);
+						if (loading != null) {
+							LodPerformanceStats.recordTileLoading();
+							if (activeVirtualTextureDistanceSquared < loading.distanceSquared()) {
+								loadingTiles.put(key, new PreparedTile(
+									loading.snapshot(), loading.images(), activeVirtualTextureDistanceSquared
+								));
+							}
+						} else if (!cache.canAdmit(key, activeVirtualTextureDistanceSquared)) {
+							LodPerformanceStats.recordTileAdmissionBlocked();
+						} else if (pendingVirtualTextureTiles.offer(key, activeVirtualTextureDistanceSquared)) {
 							LodPerformanceStats.recordTileQueued();
+						} else {
+							LodPerformanceStats.recordTileQueueRejected();
 						}
 					}
 				}

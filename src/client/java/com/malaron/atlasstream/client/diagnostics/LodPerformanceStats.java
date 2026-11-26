@@ -42,6 +42,10 @@ public final class LodPerformanceStats {
 	private static long batchClearCalls;
 	private static long batchClearRegions;
 	private static long tileRequested;
+	private static long tileResident;
+	private static long tileLoading;
+	private static long tileAdmissionBlocked;
+	private static long tileQueueRejected;
 	private static long tileQueued;
 	private static long tileBuilt;
 	private static long tileUploaded;
@@ -88,6 +92,10 @@ public final class LodPerformanceStats {
 		batchClearCalls = 0;
 		batchClearRegions = 0;
 		tileRequested = 0;
+		tileResident = 0;
+		tileLoading = 0;
+		tileAdmissionBlocked = 0;
+		tileQueueRejected = 0;
 		tileQueued = 0;
 		tileBuilt = 0;
 		tileUploaded = 0;
@@ -238,6 +246,30 @@ public final class LodPerformanceStats {
 		}
 	}
 
+	public static synchronized void recordTileResident() {
+		if (recording) {
+			tileResident++;
+		}
+	}
+
+	public static synchronized void recordTileLoading() {
+		if (recording) {
+			tileLoading++;
+		}
+	}
+
+	public static synchronized void recordTileAdmissionBlocked() {
+		if (recording) {
+			tileAdmissionBlocked++;
+		}
+	}
+
+	public static synchronized void recordTileQueueRejected() {
+		if (recording) {
+			tileQueueRejected++;
+		}
+	}
+
 	public static synchronized void recordTileQueued() {
 		if (recording) {
 			tileQueued++;
@@ -278,8 +310,10 @@ public final class LodPerformanceStats {
 		));
 		lines.add(String.format(
 			Locale.ROOT,
-			"Virtual tile lifecycle: %d requested, %d queued, %d built, %d uploaded",
-			tileRequested, tileQueued, tileBuilt, tileUploaded
+			"Virtual tile lifecycle: %d requested, %d resident, %d loading, %d blocked, "
+				+ "%d queue-rejected, %d queued, %d built, %d uploaded",
+			tileRequested, tileResident, tileLoading, tileAdmissionBlocked, tileQueueRejected,
+			tileQueued, tileBuilt, tileUploaded
 		));
 		for (SectionLod lod : SectionLod.values()) {
 			Metrics metrics = METRICS.get(lod);
