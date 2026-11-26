@@ -256,8 +256,7 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 				continue;
 			}
 			String original = entry.getValue();
-			String fragment = OriginalUvShaderContract.patchSodiumFragment(original);
-			fragment = IrisVirtualTileShaderContract.patchFragment(fragment);
+			String fragment = OriginalUvShaderContract.patchFragment(original);
 			if (!virtualContractLogged && original.contains("sceneAlbedo")) {
 				virtualContractLogged = true;
 				AtlasStream.LOGGER.info(
