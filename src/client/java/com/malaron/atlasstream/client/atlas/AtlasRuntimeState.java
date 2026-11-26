@@ -740,6 +740,9 @@ public final class AtlasRuntimeState {
 			atlasY / (double) ((TextureAtlasAccessor) previewedAtlas).atlasStream$getHeight()
 		).key();
 		Integer slot = cache.get(key);
+		if (slot == null) {
+			slot = uploadTileImages(cache, virtualTextureTileBuilder, key, false);
+		}
 		int localX = atlasX - key.tileX() * VIRTUAL_TILE_SIZE;
 		int localY = atlasY - key.tileY() * VIRTUAL_TILE_SIZE;
 		int expectedPage = pageTable.layout().pixelColorAt(
