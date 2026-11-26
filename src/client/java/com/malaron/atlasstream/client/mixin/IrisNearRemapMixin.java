@@ -4,6 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import com.malaron.atlasstream.AtlasStream;
+import com.malaron.atlasstream.shader.OriginalUvShaderContract;
 import com.malaron.atlasstream.shader.VanillaNearShaderPatcher;
 
 import org.spongepowered.asm.mixin.Mixin;
@@ -181,6 +182,7 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 			if (patchedSource.equals(source)) {
 				continue;
 			}
+			patchedSource = OriginalUvShaderContract.patchVertex(patchedSource);
 			declaration = UV0_DECLARATION.matcher(patchedSource);
 			declaration.find();
 			String head = patchedSource.substring(0, declaration.end());
@@ -244,6 +246,17 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 			}
 			entry.setValue(replaced);
 			changed = true;
+		}
+		for (Map.Entry<Object, String> entry : patched.entrySet()) {
+			if (!"FRAGMENT".equals(String.valueOf(entry.getKey()))) {
+				continue;
+			}
+			String original = entry.getValue();
+			String fragment = OriginalUvShaderContract.patchFragment(original);
+			if (!fragment.equals(original)) {
+				entry.setValue(fragment);
+				changed = true;
+			}
 		}
 		if (changed) {
 			if (!logged) {
