@@ -1,5 +1,6 @@
 package com.malaron.atlasstream.shader;
 
+import java.util.List;
 import java.util.regex.Pattern;
 
 public final class IrisVirtualTileShaderContract {
@@ -222,10 +223,43 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 		if (main < 0) {
 			return source;
 		}
-		return patchedSamples.substring(0, main)
+		int firstVirtualCall = firstVirtualCall(patchedSamples);
+		int insertion = firstVirtualCall >= 0 ? enclosingFunctionStart(patchedSamples, firstVirtualCall) : main;
+		if (insertion < 0) {
+			return source;
+		}
+		return patchedSamples.substring(0, insertion)
 			+ samplerDeclarations(patchedSamples)
 			+ HELPERS
-			+ patchedSamples.substring(main);
+			+ patchedSamples.substring(insertion);
+	}
+
+	private static int firstVirtualCall(String source) {
+		int first = Integer.MAX_VALUE;
+		for (String prefix : List.of(
+				"atlasStreamSampleVirtualGtexture(",
+				"atlasStreamSampleVirtualNormals(",
+				"atlasStreamSampleVirtualSpecular(",
+				"atlasStreamSampleParallaxGtexture(",
+				"atlasStreamSampleParallaxNormals(",
+				"atlasStreamSampleParallaxSpecular(")) {
+			int index = source.indexOf(prefix);
+			if (index >= 0) {
+				first = Math.min(first, index);
+			}
+		}
+		return first == Integer.MAX_VALUE ? -1 : first;
+	}
+
+	private static int enclosingFunctionStart(String source, int position) {
+		java.util.regex.Matcher function = Pattern.compile(
+			"(?m)^\\s*(?:[A-Za-z_]\\w*\\s+)+[A-Za-z_]\\w*\\s*\\([^;{}]*\\)\\s*\\{"
+		).matcher(source);
+		int start = -1;
+		while (function.find() && function.start() < position) {
+			start = function.start();
+		}
+		return start;
 	}
 
 	private static boolean enabledSampler(
