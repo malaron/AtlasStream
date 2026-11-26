@@ -145,7 +145,7 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 	}
 
 	public static String patchSodiumAlbedoFragment(String source) {
-		return patchSodiumAlbedoFragment(source, false);
+		return patchSodiumAlbedoFragment(source, true);
 	}
 
 	public static String patchSodiumPbrFragment(String source) {
@@ -206,9 +206,22 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 				|| !source.contains("sceneAlbedo")) {
 			return source;
 		}
+		int mainStart = source.indexOf("void main(");
+		int lastGtexturePOM = lastParallaxCallInMain(source, mainStart, "gtexture");
+		int lastNormalPOM = lastParallaxCallInMain(source, mainStart, "normals");
+		int lastSpecularPOM = lastParallaxCallInMain(source, mainStart, "specular");
 		String patchedSamples = PARALLAX_PBR_SAMPLE.matcher(source).replaceAll(match -> {
 			String sampler = match.group(1);
 			if (!enabledSampler(sampler, parallaxAlbedo, parallaxNormal, parallaxSpecular)) {
+				return match.group();
+			}
+			int expected = switch (sampler) {
+				case "gtexture" -> lastGtexturePOM;
+				case "normals" -> lastNormalPOM;
+				case "specular" -> lastSpecularPOM;
+				default -> -1;
+			};
+			if (match.start() != expected) {
 				return match.group();
 			}
 			String function = switch (sampler) {
@@ -238,6 +251,7 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 		if (main < 0) {
 			return source;
 		}
+
 		int firstVirtualCall = firstVirtualCall(patchedSamples);
 		int insertion = firstVirtualCall >= 0 ? enclosingFunctionStart(patchedSamples, firstVirtualCall) : main;
 		if (insertion < 0) {
@@ -247,6 +261,20 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 			+ samplerDeclarations(patchedSamples)
 			+ HELPERS
 			+ patchedSamples.substring(insertion);
+	}
+
+	private static int lastParallaxCallInMain(String source, int mainStart, String sampler) {
+		if (mainStart < 0) {
+			return -1;
+		}
+		java.util.regex.Matcher matches = PARALLAX_PBR_SAMPLE.matcher(source);
+		int last = -1;
+		while (matches.find()) {
+			if (matches.start() >= mainStart && sampler.equals(matches.group(1))) {
+				last = matches.start();
+			}
+		}
+		return last;
 	}
 
 	private static int firstVirtualCall(String source) {
