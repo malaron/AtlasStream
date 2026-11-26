@@ -10,6 +10,7 @@ class IrisVirtualTileShaderContractTest {
 	void addsPbrVirtualSamplersToOriginalUvShaders() {
 		String fragment = """
 			#version 330
+			layout(location = 0) out vec4 sceneAlbedo;
 			in vec2 iris_UV0;
 			in vec2 atlasStream_OriginalUv;
 			void main() {
@@ -55,5 +56,16 @@ class IrisVirtualTileShaderContractTest {
 		String fragment = "in vec2 iris_UV0;\nvoid main() {}\n";
 
 		assertEquals(fragment, IrisVirtualTileShaderContract.patchFragment(fragment));
+	}
+
+	@Test
+	void leavesShadowProgramsUnchanged() {
+		String shadow = """
+			in vec2 iris_UV0;
+			in vec2 atlasStream_OriginalUv;
+			vec4 color = textureParallax(gtexture, parallaxCoord.xy, dCoord);
+			""";
+
+		assertEquals(shadow, IrisVirtualTileShaderContract.patchFragment(shadow));
 	}
 }

@@ -168,7 +168,8 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 
 	public static String patchFragment(String source) {
 		java.util.regex.Matcher originalUv = ORIGINAL_UV.matcher(source);
-		if (!originalUv.find() || source.contains("u_AtlasStreamVirtualPageTable")) {
+		if (!originalUv.find() || source.contains("u_AtlasStreamVirtualPageTable")
+				|| !source.contains("sceneAlbedo")) {
 			return source;
 		}
 		String patchedSamples = PARALLAX_PBR_SAMPLE.matcher(source).replaceAll(match -> {
