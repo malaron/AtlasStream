@@ -142,7 +142,7 @@ vec2 atlasStreamOriginalUvFromDisplay(
             float cell = floor(gridHeader.r * 255.0 + 0.5)
                 + floor(gridHeader.g * 255.0 + 0.5) * 256.0;
             ivec2 coordinate = clamp(
-                ivec2(floor(originalUv * sourceSize / cell)),
+                ivec2(floor(baseOriginalUv * sourceSize / cell)),
                 ivec2(0),
                 ivec2(remapSize.x / 3 - 1, remapSize.y - 2)
             );
@@ -353,6 +353,7 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 		declareIfMissing(declarations, source, "gtexture");
 		declareIfMissing(declarations, source, "normals");
 		declareIfMissing(declarations, source, "specular");
+		declareIfMissing(declarations, source, "u_AtlasStreamNearRemap");
 		declareIfMissing(declarations, source, "u_AtlasStreamLowRemap");
 		return declarations.toString();
 	}
@@ -373,6 +374,7 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 		return samplerDeclared(head, "gtexture")
 			&& samplerDeclared(head, "normals")
 			&& samplerDeclared(head, "specular")
+			&& samplerDeclared(head, "u_AtlasStreamNearRemap")
 			&& samplerDeclared(head, "u_AtlasStreamLowRemap");
 	}
 
