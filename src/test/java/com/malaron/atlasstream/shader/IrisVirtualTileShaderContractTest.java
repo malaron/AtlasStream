@@ -70,6 +70,30 @@ class IrisVirtualTileShaderContractTest {
 	}
 
 	@Test
+	void rewritesOnlyAlbedoForSodiumFirstRuntimeStep() {
+		String fragment = """
+			#version 330
+			layout(location = 0) out vec4 sceneAlbedo;
+			uniform sampler2D gtexture;
+			uniform sampler2D normals;
+			uniform sampler2D specular;
+			void main() {
+			    vec4 color = texture(gtexture, uv[0], MipBias);
+			    vec4 normal = texture(normals, uv[0], MipBias);
+			    vec4 specularData = texture(specular, uv[0], MipBias);
+			    vec4 parallaxColor = textureParallax(gtexture, parallaxCoord.xy, dCoord);
+			}
+			""";
+
+		String patched = IrisVirtualTileShaderContract.patchSodiumAlbedoFragment(fragment);
+
+		assertTrue(patched.contains("atlasStreamSampleVirtualGtexture("));
+		assertTrue(patched.contains("atlasStreamSampleParallaxGtexture("));
+		assertTrue(patched.contains("texture(normals, uv[0], MipBias)"));
+		assertTrue(patched.contains("texture(specular, uv[0], MipBias)"));
+	}
+
+	@Test
 	void buildsValidSodiumCandidateWithoutRequiringIrisUvInput() {
 		String fragment = """
 			#version 330

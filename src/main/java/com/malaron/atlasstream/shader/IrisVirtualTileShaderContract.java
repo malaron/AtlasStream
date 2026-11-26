@@ -175,6 +175,19 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 	}
 
 	public static String patchFragment(String source) {
+		return patchFragment(source, true, true, true);
+	}
+
+	public static String patchSodiumAlbedoFragment(String source) {
+		return patchFragment(
+			OriginalUvShaderContract.patchSodiumFragment(source),
+			true,
+			false,
+			false
+		);
+	}
+
+	private static String patchFragment(String source, boolean albedo, boolean normal, boolean specular) {
 		java.util.regex.Matcher originalUv = ORIGINAL_UV.matcher(source);
 		if (!originalUv.find() || source.contains("u_AtlasStreamVirtualPageTable")
 				|| !source.contains("sceneAlbedo")) {
@@ -182,6 +195,9 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 		}
 		String patchedSamples = PARALLAX_PBR_SAMPLE.matcher(source).replaceAll(match -> {
 			String sampler = match.group(1);
+			if (!enabledSampler(sampler, albedo, normal, specular)) {
+				return match.group();
+			}
 			String function = switch (sampler) {
 				case "gtexture" -> "atlasStreamSampleParallaxGtexture";
 				case "normals" -> "atlasStreamSampleParallaxNormals";
@@ -193,6 +209,9 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 		});
 		patchedSamples = DIRECT_PBR_SAMPLE.matcher(patchedSamples).replaceAll(match -> {
 			String sampler = match.group(1);
+			if (!enabledSampler(sampler, albedo, normal, specular)) {
+				return match.group();
+			}
 			String function = switch (sampler) {
 				case "gtexture" -> "atlasStreamSampleVirtualGtexture";
 				case "normals" -> "atlasStreamSampleVirtualNormals";
@@ -210,6 +229,20 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 			+ samplerDeclarations(patchedSamples)
 			+ HELPERS
 			+ patchedSamples.substring(main);
+	}
+
+	private static boolean enabledSampler(
+		String sampler,
+		boolean albedo,
+		boolean normal,
+		boolean specular
+	) {
+		return switch (sampler) {
+			case "gtexture" -> albedo;
+			case "normals" -> normal;
+			case "specular" -> specular;
+			default -> false;
+		};
 	}
 
 	public static Analysis analyzeSodiumFragment(String source) {
