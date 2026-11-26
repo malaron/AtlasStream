@@ -57,7 +57,8 @@ public final class OriginalUvShaderContract {
 	}
 
 	public static String patchSodiumFragment(String source) {
-		if (IN_DECLARATION.matcher(source).find()) {
+		if (IN_DECLARATION.matcher(source).find()
+				&& source.contains("flat in vec2 atlasStream_DisplayToOriginalUvScale;")) {
 			return source;
 		}
 		int version = source.indexOf("#version");
@@ -68,12 +69,15 @@ public final class OriginalUvShaderContract {
 		}
 		return source.substring(0, insertion)
 			+ "in vec2 atlasStream_OriginalUv;\n"
+			+ "flat in vec2 atlasStream_DisplayToOriginalUvScale;\n"
 			+ source.substring(insertion);
 	}
 
 	public static String patchSodiumVertex(String source, String originalTexcoordReturn) {
 		String assignment =
 			"atlasStream_OriginalUv = vec2(a_TexCoord & TEXTURE_MAX_VALUE) / float(TEXTURE_MAX_COORD);"
+				+ " atlasStream_DisplayToOriginalUvScale = "
+				+ "atlasStreamDisplayToOriginalScale(atlasStream_OriginalUv);"
 				+ " return atlasStreamTerrainRemap(atlasStream_OriginalUv);";
 		if (!source.contains(originalTexcoordReturn) || source.contains("atlasStream_OriginalUv = vec2(")) {
 			return source;

@@ -85,13 +85,8 @@ vec2 atlasStreamOriginalUvFromDisplay(
     vec2 baseDisplayUv,
     vec2 displayUv
 ) {
-    mat2 displayJacobian = mat2(dFdx(baseDisplayUv), dFdy(baseDisplayUv));
-    mat2 originalJacobian = mat2(dFdx(baseOriginalUv), dFdy(baseOriginalUv));
-    if (abs(determinant(displayJacobian)) < 1e-12) {
-        return baseOriginalUv;
-    }
     return baseOriginalUv
-        + originalJacobian * inverse(displayJacobian) * (displayUv - baseDisplayUv);
+        + (displayUv - baseDisplayUv) * atlasStream_DisplayToOriginalUvScale;
 }
 
 vec4 atlasStreamSampleParallax(
