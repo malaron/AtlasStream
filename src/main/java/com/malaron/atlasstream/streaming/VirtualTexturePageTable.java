@@ -95,7 +95,8 @@ public final class VirtualTexturePageTable {
 		int green = encodedLayer >>> 8 & 255;
 		int blue = encodedLayer >>> 16 & 255;
 		int alpha = encodedLayer == 0 ? 0 : 255;
-		return (alpha << 24) | (red << 16) | (green << 8) | blue;
+		// NativeImage.setPixel stores ABGR integers in RGBA texture byte order.
+		return (alpha << 24) | (blue << 16) | (green << 8) | red;
 	}
 
 	public int tileCountX(int mipLevel) {

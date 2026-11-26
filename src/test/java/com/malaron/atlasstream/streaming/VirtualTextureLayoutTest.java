@@ -105,9 +105,9 @@ class VirtualTextureLayoutTest {
 		int slot = 0xFEDCBA;
 		pageTable.setResident(key, slot);
 		int encoded = pageTable.pixelColorAt(pageTable.pixelX(key), pageTable.pixelY(key));
-		int decoded = (encoded >>> 16 & 0xFF)
+		int decoded = (encoded & 0xFF)
 			| (encoded >>> 8 & 0xFF) << 8
-			| (encoded & 0xFF) << 16;
+			| (encoded >>> 16 & 0xFF) << 16;
 		assertEquals(slot + 1, decoded);
 	}
 }
