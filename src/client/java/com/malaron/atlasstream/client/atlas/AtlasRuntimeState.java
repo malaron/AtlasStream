@@ -943,6 +943,11 @@ public final class AtlasRuntimeState {
 		return near != null && near.isUsable() && near.isCompact();
 	}
 
+	public static boolean isNearAtlasHybrid() {
+		NearAtlas near = nearAtlas;
+		return near != null && near.isUsable() && near.isHybrid();
+	}
+
 	public static NearAtlas activeNearAtlas() {
 		NearAtlas near = nearAtlas;
 		return near != null && near.isUsable() ? near : null;
@@ -2981,9 +2986,19 @@ public final class AtlasRuntimeState {
 						net.minecraft.client.Minecraft.getInstance().getResourceManager()
 					);
 					if (created != null && created.isCompact() && NearAtlas.hybridRequested()) {
-						AtlasStream.LOGGER.info(
-							"Repacked low atlas uses compact near-atlas streaming instead of the layout-based hybrid fallback"
-						);
+						try {
+							created.initializeHybrid(image.mipLevels(), image.pbrImages());
+						} catch (RuntimeException exception) {
+							AtlasStream.LOGGER.error(
+								"Could not initialize compact near-atlas fallback; using regular compact streaming",
+								exception
+							);
+							created.close();
+							created = NearAtlas.create(
+								atlasWidth, atlasHeight, atlasMipLevels,
+								net.minecraft.client.Minecraft.getInstance().getResourceManager()
+							);
+						}
 					}
 					if (nearAtlas != null) {
 						nearAtlas.close();

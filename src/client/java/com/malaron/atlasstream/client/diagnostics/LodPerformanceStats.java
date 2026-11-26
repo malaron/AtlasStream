@@ -41,6 +41,8 @@ public final class LodPerformanceStats {
 	private static long batchClearNanos;
 	private static long batchClearCalls;
 	private static long batchClearRegions;
+	private static long hybridDrawNanos;
+	private static long hybridDrawCalls;
 	private static final List<Long> FRAME_NANOS = new ArrayList<>();
 
 	static {
@@ -83,6 +85,8 @@ public final class LodPerformanceStats {
 		batchClearNanos = 0;
 		batchClearCalls = 0;
 		batchClearRegions = 0;
+		hybridDrawNanos = 0;
+		hybridDrawCalls = 0;
 		FRAME_NANOS.clear();
 		sampleStartNanos = System.nanoTime();
 		recording = true;
@@ -218,6 +222,13 @@ public final class LodPerformanceStats {
 		}
 	}
 
+	public static synchronized void recordHybridDraw(long elapsedNanos) {
+		if (recording) {
+			hybridDrawNanos += elapsedNanos;
+			hybridDrawCalls++;
+		}
+	}
+
 	public static synchronized void recordFrame(long elapsedNanos) {
 		if (recording) {
 			FRAME_NANOS.add(elapsedNanos);
@@ -243,6 +254,12 @@ public final class LodPerformanceStats {
 			"Filtered-list cache: %d hits, %d misses",
 			filterCacheHits,
 			filterCacheMisses
+		));
+		lines.add(String.format(
+			Locale.ROOT,
+			"Hybrid single-pass terrain: render submit %.1f ms/%d calls",
+			toMilliseconds(hybridDrawNanos),
+			hybridDrawCalls
 		));
 		for (SectionLod lod : SectionLod.values()) {
 			Metrics metrics = METRICS.get(lod);
