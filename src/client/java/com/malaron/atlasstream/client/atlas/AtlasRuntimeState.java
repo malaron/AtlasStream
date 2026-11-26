@@ -741,7 +741,15 @@ public final class AtlasRuntimeState {
 		).key();
 		Integer slot = cache.get(key);
 		if (slot == null) {
-			slot = uploadTileImages(cache, virtualTextureTileBuilder, key, false);
+			int cacheMipLevels = Math.min(
+				Integer.numberOfTrailingZeros(VIRTUAL_TILE_SIZE) + 1,
+				pageTable.layout().mipLevelCount()
+			);
+			try (NativeTileBundle images = buildTileBundle(key, cacheMipLevels)) {
+				slot = cache.upload(
+					key, images.albedo(), images.normal(), images.specular(), 0.0
+				);
+			}
 		}
 		int localX = atlasX - key.tileX() * VIRTUAL_TILE_SIZE;
 		int localY = atlasY - key.tileY() * VIRTUAL_TILE_SIZE;
