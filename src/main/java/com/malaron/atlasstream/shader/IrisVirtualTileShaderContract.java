@@ -179,15 +179,30 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 	}
 
 	public static String patchSodiumAlbedoFragment(String source) {
+		return patchSodiumAlbedoFragment(source, false);
+	}
+
+	public static String patchSodiumAlbedoFragment(String source, boolean parallax) {
 		return patchFragment(
 			OriginalUvShaderContract.patchSodiumFragment(source),
 			true,
 			false,
-			false
+			false,
+			parallax
 		);
 	}
 
 	private static String patchFragment(String source, boolean albedo, boolean normal, boolean specular) {
+		return patchFragment(source, albedo, normal, specular, true);
+	}
+
+	private static String patchFragment(
+		String source,
+		boolean albedo,
+		boolean normal,
+		boolean specular,
+		boolean parallax
+	) {
 		java.util.regex.Matcher originalUv = ORIGINAL_UV.matcher(source);
 		if (!originalUv.find() || source.contains("u_AtlasStreamVirtualPageTable")
 				|| !source.contains("sceneAlbedo")) {
@@ -195,7 +210,7 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 		}
 		String patchedSamples = PARALLAX_PBR_SAMPLE.matcher(source).replaceAll(match -> {
 			String sampler = match.group(1);
-			if (!enabledSampler(sampler, albedo, normal, specular)) {
+			if (!parallax || !enabledSampler(sampler, albedo, normal, specular)) {
 				return match.group();
 			}
 			String function = switch (sampler) {

@@ -88,7 +88,7 @@ class IrisVirtualTileShaderContractTest {
 		String patched = IrisVirtualTileShaderContract.patchSodiumAlbedoFragment(fragment);
 
 		assertTrue(patched.contains("atlasStreamSampleVirtualGtexture("));
-		assertTrue(patched.contains("atlasStreamSampleParallaxGtexture("));
+		assertTrue(patched.contains("textureParallax(gtexture, parallaxCoord.xy, dCoord)"));
 		assertTrue(patched.contains("texture(normals, uv[0], MipBias)"));
 		assertTrue(patched.contains("texture(specular, uv[0], MipBias)"));
 	}
