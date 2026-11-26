@@ -3719,6 +3719,8 @@ public final class AtlasRuntimeState {
 	}
 
 	private static final class LazyPbrSpriteMips {
+		private static final java.util.concurrent.atomic.AtomicInteger DIMENSION_MISMATCHES =
+			new java.util.concurrent.atomic.AtomicInteger();
 		private final ResourceManager resourceManager;
 		private final Identifier identifier;
 		private final String suffix;
@@ -3794,10 +3796,24 @@ public final class AtlasRuntimeState {
 			Optional<Resource> resource = resourceManager.getResource(resourceId);
 			if (resource.isPresent()) {
 				try (InputStream input = resource.get().open(); NativeImage source = NativeImage.read(input)) {
+					int expectedFrameHeight = Math.max(
+						1,
+						(int) ((long) source.getWidth() * currentHeight / currentWidth)
+					);
 					int frameHeight = Math.min(
 						source.getHeight(),
-						Math.max(1, (int) ((long) source.getWidth() * currentHeight / currentWidth))
+						expectedFrameHeight
 					);
+					if ((source.getWidth() != currentWidth || frameHeight != currentHeight
+							|| source.getHeight() != frameHeight)
+							&& DIMENSION_MISMATCHES.getAndIncrement() < 100) {
+						AtlasStream.LOGGER.warn(
+							"Virtual PBR source geometry for {}{} is {}x{}; atlas frame is {}x{} "
+								+ "(expected strip frame height {})",
+							identifier, suffix, source.getWidth(), source.getHeight(),
+							currentWidth, currentHeight, expectedFrameHeight
+						);
+					}
 					for (int y = 0; y < currentHeight; y++) {
 						for (int x = 0; x < currentWidth; x++) {
 							current[y * currentWidth + x] = source.getPixel(
