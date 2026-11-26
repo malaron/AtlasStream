@@ -113,9 +113,7 @@ vec4 atlasStreamSampleParallax(
 }
 
 vec4 atlasStreamSampleParallaxGtexture(vec2 uv, vec2 baseUv, vec2 originalUv, mat2 derivatives) {
-    return atlasStreamSampleParallax(
-        gtexture, u_AtlasStreamVirtualAlbedo, uv, baseUv, originalUv, derivatives
-    );
+    return atlasStreamSampleVirtualGtexture(baseUv, originalUv, 0.0);
 }
 
 vec4 atlasStreamSampleParallaxNormals(vec2 uv, vec2 baseUv, vec2 originalUv, mat2 derivatives) {
@@ -147,7 +145,7 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 	}
 
 	public static String patchSodiumAlbedoFragment(String source) {
-		return patchSodiumAlbedoFragment(source, false);
+		return patchSodiumAlbedoFragment(source, true);
 	}
 
 	public static String patchSodiumPbrFragment(String source) {
