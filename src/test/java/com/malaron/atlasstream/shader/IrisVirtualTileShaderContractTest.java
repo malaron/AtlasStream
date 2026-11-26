@@ -89,7 +89,7 @@ class IrisVirtualTileShaderContractTest {
 
 		assertTrue(patched.contains("atlasStreamSampleVirtualGtexture("));
 		assertTrue(patched.contains("atlasStreamSampleParallaxGtexture("));
-		assertTrue(patched.contains("scale = vec2(exp2(float(max(encodedFactor - 1, 0))));"));
+		assertTrue(patched.contains("atlasStreamOriginalUvFromDisplay("));
 		assertTrue(patched.contains("texture(normals, uv[0], MipBias)"));
 		assertTrue(patched.contains("texture(specular, uv[0], MipBias)"));
 	}
