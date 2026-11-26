@@ -259,7 +259,7 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 				continue;
 			}
 			String original = entry.getValue();
-			String fragment = IrisVirtualTileShaderContract.patchSodiumNormalFragment(original);
+			String fragment = IrisVirtualTileShaderContract.patchSodiumAlbedoFragment(original);
 			if (!virtualContractLogged && original.contains("sceneAlbedo")) {
 				virtualContractLogged = true;
 				var analysis = IrisVirtualTileShaderContract.analyzeSodiumFragment(original);
