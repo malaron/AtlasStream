@@ -12,7 +12,7 @@ public final class IrisVirtualTileShaderContract {
 	private static final Pattern PARALLAX_PBR_SAMPLE = Pattern.compile(
 		"\\btextureParallax\\s*\\(\\s*(gtexture|normals|specular)\\s*,\\s*([^,\\n]+)\\s*,\\s*([^\\)\\n]+)\\s*\\)"
 	);
-	private static final String DECLARATIONS = """
+	private static final String HELPERS = """
 
 uniform sampler2D u_AtlasStreamVirtualAlbedo;
 uniform sampler2D u_AtlasStreamVirtualNormal;
@@ -202,10 +202,81 @@ vec4 atlasStreamSampleParallaxSpecular(vec2 uv, vec2 baseUv, vec2 originalUv, ma
 			return function + "(" + match.group(2).trim() + ", atlasStream_OriginalUv, "
 				+ match.group(3).trim() + ")";
 		});
-		java.util.regex.Matcher patchedOriginalUv = ORIGINAL_UV.matcher(patchedSamples);
-		patchedOriginalUv.find();
-		return patchedSamples.substring(0, patchedOriginalUv.end())
-			+ DECLARATIONS
-			+ patchedSamples.substring(patchedOriginalUv.end());
+		int main = patchedSamples.indexOf("void main(");
+		if (main < 0) {
+			return source;
+		}
+		return patchedSamples.substring(0, main)
+			+ samplerDeclarations(patchedSamples)
+			+ HELPERS
+			+ patchedSamples.substring(main);
+	}
+
+	public static Analysis analyzeSodiumFragment(String source) {
+		String withOriginalUv = OriginalUvShaderContract.patchSodiumFragment(source);
+		String candidate = patchFragment(withOriginalUv);
+		int helper = candidate.indexOf("bool atlasStreamVirtualLookup(");
+		int main = candidate.indexOf("void main(");
+		return new Analysis(
+			withOriginalUv.contains("in vec2 atlasStream_OriginalUv;"),
+			directSampleCount(source),
+			directSampleCount(mainBody(candidate)),
+			parallaxSampleCount(source),
+			parallaxSampleCount(mainBody(candidate)),
+			candidate.contains("uniform sampler2D u_AtlasStreamVirtualPageTable;"),
+			helper >= 0 && helper < main,
+			requiredSamplersDeclaredBeforeHelpers(candidate, helper)
+		);
+	}
+
+	private static String mainBody(String source) {
+		int main = source.indexOf("void main(");
+		return main < 0 ? source : source.substring(main);
+	}
+
+	private static String samplerDeclarations(String source) {
+		StringBuilder declarations = new StringBuilder();
+		declareIfMissing(declarations, source, "gtexture");
+		declareIfMissing(declarations, source, "normals");
+		declareIfMissing(declarations, source, "specular");
+		declareIfMissing(declarations, source, "u_AtlasStreamLowRemap");
+		return declarations.toString();
+	}
+
+	private static void declareIfMissing(StringBuilder declarations, String source, String sampler) {
+		if (!Pattern.compile(
+			"\\buniform\\s+(?:\\w+\\s+)*sampler2D\\s+" + Pattern.quote(sampler) + "\\s*;"
+		).matcher(source).find()) {
+			declarations.append("uniform sampler2D ").append(sampler).append(";\n");
+		}
+	}
+
+	private static boolean requiredSamplersDeclaredBeforeHelpers(String source, int helper) {
+		if (helper < 0) {
+			return false;
+		}
+		String head = source.substring(0, helper);
+		return samplerDeclared(head, "gtexture")
+			&& samplerDeclared(head, "normals")
+			&& samplerDeclared(head, "specular")
+			&& samplerDeclared(head, "u_AtlasStreamLowRemap");
+	}
+
+	private static boolean samplerDeclared(String source, String sampler) {
+		return Pattern.compile(
+			"\\buniform\\s+(?:\\w+\\s+)*sampler2D\\s+" + Pattern.quote(sampler) + "\\s*;"
+		).matcher(source).find();
+	}
+
+	public record Analysis(
+		boolean originalUvInput,
+		int originalDirectSamples,
+		int candidateDirectSamples,
+		int originalParallaxSamples,
+		int candidateParallaxSamples,
+		boolean virtualSamplersDeclared,
+		boolean helpersBeforeMain,
+		boolean requiredSamplersBeforeHelpers
+	) {
 	}
 }

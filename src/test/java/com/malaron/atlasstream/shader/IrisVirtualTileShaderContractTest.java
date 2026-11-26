@@ -68,4 +68,30 @@ class IrisVirtualTileShaderContractTest {
 
 		assertEquals(shadow, IrisVirtualTileShaderContract.patchFragment(shadow));
 	}
+
+	@Test
+	void buildsValidSodiumCandidateWithoutRequiringIrisUvInput() {
+		String fragment = """
+			#version 330
+			layout(location = 0) out vec4 sceneAlbedo;
+			uniform sampler2D gtexture;
+			uniform sampler2D normals;
+			uniform sampler2D specular;
+			void main() {
+			    vec4 color = texture(gtexture, uv[0], MipBias);
+			    vec4 normal = textureParallax(normals, parallaxCoord.xy, dCoord);
+			}
+			""";
+
+		var analysis = IrisVirtualTileShaderContract.analyzeSodiumFragment(fragment);
+
+		assertTrue(analysis.originalUvInput());
+		assertEquals(1, analysis.originalDirectSamples());
+		assertEquals(0, analysis.candidateDirectSamples());
+		assertEquals(1, analysis.originalParallaxSamples());
+		assertEquals(0, analysis.candidateParallaxSamples());
+		assertTrue(analysis.virtualSamplersDeclared());
+		assertTrue(analysis.helpersBeforeMain());
+		assertTrue(analysis.requiredSamplersBeforeHelpers());
+	}
 }

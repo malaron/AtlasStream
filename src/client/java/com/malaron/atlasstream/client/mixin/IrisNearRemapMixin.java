@@ -259,16 +259,19 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 			String fragment = OriginalUvShaderContract.patchFragment(original);
 			if (!virtualContractLogged && original.contains("sceneAlbedo")) {
 				virtualContractLogged = true;
+				var analysis = IrisVirtualTileShaderContract.analyzeSodiumFragment(original);
 				AtlasStream.LOGGER.info(
-					"Iris virtual shader contract: originalUvIn={}, directSamples={}/{}, "
-						+ "parallaxSamples={}/{}, samplerDeclared={}",
-					original.contains("atlasStream_OriginalUv")
-						|| fragment.contains("atlasStream_OriginalUv"),
-					IrisVirtualTileShaderContract.directSampleCount(original),
-					IrisVirtualTileShaderContract.directSampleCount(fragment),
-					IrisVirtualTileShaderContract.parallaxSampleCount(original),
-					IrisVirtualTileShaderContract.parallaxSampleCount(fragment),
-					fragment.contains("u_AtlasStreamVirtualPageTable")
+					"Iris virtual shader contract candidate: originalUvIn={}, directSamples={}/{}, "
+						+ "parallaxSamples={}/{}, samplerDeclared={}, helpersBeforeMain={}, "
+						+ "requiredSamplersBeforeHelpers={}",
+					analysis.originalUvInput(),
+					analysis.originalDirectSamples(),
+					analysis.candidateDirectSamples(),
+					analysis.originalParallaxSamples(),
+					analysis.candidateParallaxSamples(),
+					analysis.virtualSamplersDeclared(),
+					analysis.helpersBeforeMain(),
+					analysis.requiredSamplersBeforeHelpers()
 				);
 			}
 			if (!fragment.equals(original)) {
