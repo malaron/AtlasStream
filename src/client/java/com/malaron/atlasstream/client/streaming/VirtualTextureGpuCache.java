@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Queue;
 
 import com.malaron.atlasstream.streaming.ByteLruCache;
+import com.malaron.atlasstream.streaming.FixedVirtualTextureCachePlan;
 import com.malaron.atlasstream.streaming.VirtualTextureResidencyPriority;
 import com.malaron.atlasstream.streaming.VirtualTextureTileKey;
 
@@ -51,21 +52,15 @@ public final class VirtualTextureGpuCache implements AutoCloseable {
 			.getDeviceInfo()
 			.limits()
 			.maxTextureSizeForFormat(GpuFormat.RGBA8_UNORM);
-		int maximumTilesPerSide = maximumTextureSize / tileTextureSize;
-		int maximumTextureTiles = Math.multiplyExact(maximumTilesPerSide, maximumTilesPerSide);
-		int tileCount = (int) Math.min(
-			maximumTextureTiles,
-			budgetBytes / bytesPerTile
+		FixedVirtualTextureCachePlan plan = FixedVirtualTextureCachePlan.create(
+			tileTextureSize, mipLevelCount, budgetBytes, maximumTextureSize, false
 		);
-		if (tileCount <= 0) {
-			throw new IllegalArgumentException("GPU cache budget cannot hold one virtual texture tile");
-		}
-		this.gridWidth = Math.max(1, (int) Math.sqrt(tileCount));
-		this.gridHeight = tileCount / gridWidth;
-		int slotCount = Math.multiplyExact(gridWidth, gridHeight);
-		int textureWidth = Math.multiplyExact(gridWidth, tileTextureSize);
-		int textureHeight = Math.multiplyExact(gridHeight, tileTextureSize);
-		long allocationBytes = Math.multiplyExact(bytesPerTile, slotCount);
+		this.gridWidth = plan.gridWidth();
+		this.gridHeight = plan.gridHeight();
+		int slotCount = plan.slotCount();
+		int textureWidth = plan.textureWidth();
+		int textureHeight = plan.textureHeight();
+		long allocationBytes = plan.capacityBytes();
 		long maximumAllocation = RenderSystem.getDevice().getDeviceInfo().limits().maxMemoryAllocationSize();
 		if (allocationBytes > maximumAllocation) {
 			throw new IllegalArgumentException(
