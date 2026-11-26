@@ -139,9 +139,22 @@ public final class SodiumTerrainIntegration {
 			}
 			return;
 		}
-		boolean irisFixedTilePass = distancePreview
+		boolean irisFixedTilePass = false;
+		boolean irisLowOnlyPass = distancePreview
 			&& isIrisShaderPackInUse()
 			&& !AtlasRuntimeState.isNearAtlasActive();
+		if (irisLowOnlyPass) {
+			ACTIVE_LOD.set(SectionLod.LOW_RESOLUTION);
+			try {
+				refreshIrisPbrSamplers();
+				arguments[1] = renderLists;
+				invoke(renderMethod, renderer, arguments);
+			} finally {
+				ACTIVE_LOD.remove();
+				refreshIrisPbrSamplers();
+			}
+			return;
+		}
 		// With Iris and the near atlas, translucent terrain is split by distance too so glass and water near the
 		// player use full-resolution textures. Far sections are drawn first to keep back-to-front order.
 		boolean splitTranslucent = translucent && isIrisShaderPackInUse() && AtlasRuntimeState.isNearAtlasActive();
