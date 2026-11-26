@@ -1050,7 +1050,11 @@ public final class AtlasRuntimeState {
 			}
 			AnimatedTile snapshot = snapshotAnimatedTile(builder, key);
 			loadingTiles.put(key, new PreparedTile(snapshot, animatedTileExecutor.submit(
-				() -> buildTileImages(builder, key, cacheMipLevels)
+				() -> {
+					List<NativeImage> images = buildTileImages(builder, key, cacheMipLevels);
+					LodPerformanceStats.recordTileBuilt();
+					return images;
+				}
 			), request.distanceSquared()));
 		}
 	}
@@ -1102,6 +1106,7 @@ public final class AtlasRuntimeState {
 						animatedTiles.put(entry.getKey(), entry.getValue().snapshot());
 					}
 					uploads++;
+					LodPerformanceStats.recordTileUploaded();
 				}
 			} catch (Exception exception) {
 				AtlasStream.LOGGER.error("Could not stream virtual texture tile {}", entry.getKey(), exception);
@@ -1424,6 +1429,7 @@ public final class AtlasRuntimeState {
 			boolean wanted = key.mipLevel() < lowAtlasMip
 				&& effectiveDistance <= (STREAM_MIP0_BLOCKS << key.mipLevel());
 			if (wanted && !animatedVirtualTextureTiles.contains(key)) {
+				LodPerformanceStats.recordTileRequested();
 				VirtualTextureGpuCache cache = virtualTextureGpuCache;
 				if (cache != null) {
 					if (!cache.noteDemand(key, activeVirtualTextureDistanceSquared)) {
@@ -1434,6 +1440,7 @@ public final class AtlasRuntimeState {
 							));
 						} else if (loading == null && cache.canAdmit(key, activeVirtualTextureDistanceSquared)) {
 							pendingVirtualTextureTiles.offer(key, activeVirtualTextureDistanceSquared);
+							LodPerformanceStats.recordTileQueued();
 						}
 					}
 				}

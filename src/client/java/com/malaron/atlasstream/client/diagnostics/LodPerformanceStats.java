@@ -41,6 +41,10 @@ public final class LodPerformanceStats {
 	private static long batchClearNanos;
 	private static long batchClearCalls;
 	private static long batchClearRegions;
+	private static long tileRequested;
+	private static long tileQueued;
+	private static long tileBuilt;
+	private static long tileUploaded;
 	private static final List<Long> FRAME_NANOS = new ArrayList<>();
 
 	static {
@@ -83,6 +87,10 @@ public final class LodPerformanceStats {
 		batchClearNanos = 0;
 		batchClearCalls = 0;
 		batchClearRegions = 0;
+		tileRequested = 0;
+		tileQueued = 0;
+		tileBuilt = 0;
+		tileUploaded = 0;
 		FRAME_NANOS.clear();
 		sampleStartNanos = System.nanoTime();
 		recording = true;
@@ -224,6 +232,30 @@ public final class LodPerformanceStats {
 		}
 	}
 
+	public static synchronized void recordTileRequested() {
+		if (recording) {
+			tileRequested++;
+		}
+	}
+
+	public static synchronized void recordTileQueued() {
+		if (recording) {
+			tileQueued++;
+		}
+	}
+
+	public static synchronized void recordTileBuilt() {
+		if (recording) {
+			tileBuilt++;
+		}
+	}
+
+	public static synchronized void recordTileUploaded() {
+		if (recording) {
+			tileUploaded++;
+		}
+	}
+
 	public static synchronized List<String> stopAndFormat() {
 		if (!recording) {
 			return List.of();
@@ -243,6 +275,11 @@ public final class LodPerformanceStats {
 			"Filtered-list cache: %d hits, %d misses",
 			filterCacheHits,
 			filterCacheMisses
+		));
+		lines.add(String.format(
+			Locale.ROOT,
+			"Virtual tile lifecycle: %d requested, %d queued, %d built, %d uploaded",
+			tileRequested, tileQueued, tileBuilt, tileUploaded
 		));
 		for (SectionLod lod : SectionLod.values()) {
 			Metrics metrics = METRICS.get(lod);
