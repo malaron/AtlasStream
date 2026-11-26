@@ -62,6 +62,7 @@ import net.minecraft.server.packs.resources.ResourceManager;
 
 public final class AtlasRuntimeState {
 	private static final int VIRTUAL_TILE_SIZE = 128;
+	private static final long IRIS_VIRTUAL_CACHE_BUDGET_BYTES = 256L * 1024 * 1024;
 	private static final long MAX_PREVIEW_BYTES = 2048L * 1024 * 1024;
 	private static final long MAX_ANIMATION_BLEND_CACHE_BYTES = 32L * 1024 * 1024;
 	private static final AnimationBlendCache<AnimationBlendKey, List<NativeImage>> animationBlendCache =
@@ -2939,9 +2940,10 @@ public final class AtlasRuntimeState {
 				long mipSize = Math.max(1, VIRTUAL_TILE_SIZE >> mip);
 				minimumCacheBytes = Math.addExact(minimumCacheBytes, mipSize * mipSize * 4);
 			}
-			// Iris terrain never samples virtual tiles, so keep the cache at its minimum size.
+			// Iris sampling is not enabled yet, but exercise its request/build/upload path with a bounded fixed cache.
+			// This tier remains intentionally small until all three PBR surfaces use one atomic residency lifecycle.
 			long cacheBudgetBytes = SodiumTerrainIntegration.isIrisShaderPackInUse()
-				? minimumCacheBytes
+				? Math.max(minimumCacheBytes, IRIS_VIRTUAL_CACHE_BUDGET_BYTES)
 				: Math.max(minimumCacheBytes, Math.min(configuredBudgetBytes, atlasBudgetBytes));
 			tileCache = new VirtualTextureGpuCache(
 				pageTable,
