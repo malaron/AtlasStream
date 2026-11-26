@@ -6,6 +6,9 @@ public final class IrisVirtualTileShaderContract {
 	private static final Pattern ORIGINAL_UV = Pattern.compile(
 		"\\bin\\s+vec2\\s+atlasStream_OriginalUv\\s*;"
 	);
+	private static final Pattern DIRECT_PBR_SAMPLE = Pattern.compile(
+		"\\btexture\\s*\\(\\s*(gtexture|normals|specular)\\s*,\\s*([^,\\n]+)\\s*,\\s*([^\\)\\n]+)\\s*\\)"
+	);
 	private static final String DECLARATIONS = """
 
 uniform sampler2D u_AtlasStreamVirtualAlbedo;
@@ -35,6 +38,43 @@ bool atlasStreamVirtualLookup(
     localUv = (originalUv * vec2(atlasSize) - vec2(tile * 128)) / 128.0;
     return slot >= 0;
 }
+
+vec2 atlasStreamVirtualCacheUv(
+    vec2 originalUv,
+    sampler2D cacheTexture
+) {
+    int slot;
+    vec2 localUv;
+    if (!atlasStreamVirtualLookup(originalUv, slot, localUv)) {
+        return vec2(-1.0);
+    }
+    ivec2 cacheSize = textureSize(cacheTexture, 0);
+    int gridWidth = max(1, cacheSize.x / 128);
+    ivec2 slotCoordinate = ivec2(slot % gridWidth, slot / gridWidth);
+    localUv = clamp(localUv, vec2(0.5 / 128.0), vec2(1.0 - 0.5 / 128.0));
+    return (vec2(slotCoordinate * 128) + localUv * 128.0) / vec2(cacheSize);
+}
+
+vec4 atlasStreamSampleVirtualGtexture(vec2 displayUv, vec2 originalUv, float bias) {
+    vec2 cacheUv = atlasStreamVirtualCacheUv(originalUv, u_AtlasStreamVirtualAlbedo);
+    return cacheUv.x < 0.0
+        ? texture(gtexture, displayUv, bias)
+        : texture(u_AtlasStreamVirtualAlbedo, cacheUv, bias);
+}
+
+vec4 atlasStreamSampleVirtualNormals(vec2 displayUv, vec2 originalUv, float bias) {
+    vec2 cacheUv = atlasStreamVirtualCacheUv(originalUv, u_AtlasStreamVirtualNormal);
+    return cacheUv.x < 0.0
+        ? texture(normals, displayUv, bias)
+        : texture(u_AtlasStreamVirtualNormal, cacheUv, bias);
+}
+
+vec4 atlasStreamSampleVirtualSpecular(vec2 displayUv, vec2 originalUv, float bias) {
+    vec2 cacheUv = atlasStreamVirtualCacheUv(originalUv, u_AtlasStreamVirtualSpecular);
+    return cacheUv.x < 0.0
+        ? texture(specular, displayUv, bias)
+        : texture(u_AtlasStreamVirtualSpecular, cacheUv, bias);
+}
 """;
 
 	private IrisVirtualTileShaderContract() {
@@ -45,8 +85,21 @@ bool atlasStreamVirtualLookup(
 		if (!originalUv.find() || source.contains("u_AtlasStreamVirtualPageTable")) {
 			return source;
 		}
-		return source.substring(0, originalUv.end())
+		String patchedSamples = DIRECT_PBR_SAMPLE.matcher(source).replaceAll(match -> {
+			String sampler = match.group(1);
+			String function = switch (sampler) {
+				case "gtexture" -> "atlasStreamSampleVirtualGtexture";
+				case "normals" -> "atlasStreamSampleVirtualNormals";
+				case "specular" -> "atlasStreamSampleVirtualSpecular";
+				default -> throw new IllegalStateException("Unexpected sampler " + sampler);
+			};
+			return function + "(" + match.group(2).trim() + ", atlasStream_OriginalUv, "
+				+ match.group(3).trim() + ")";
+		});
+		java.util.regex.Matcher patchedOriginalUv = ORIGINAL_UV.matcher(patchedSamples);
+		patchedOriginalUv.find();
+		return patchedSamples.substring(0, patchedOriginalUv.end())
 			+ DECLARATIONS
-			+ source.substring(originalUv.end());
+			+ patchedSamples.substring(patchedOriginalUv.end());
 	}
 }

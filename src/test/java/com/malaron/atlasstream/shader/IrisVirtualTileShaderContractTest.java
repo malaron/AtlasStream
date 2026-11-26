@@ -13,6 +13,9 @@ class IrisVirtualTileShaderContractTest {
 			in vec2 iris_UV0;
 			in vec2 atlasStream_OriginalUv;
 			void main() {
+			    vec4 color = texture(gtexture, iris_UV0, MipBias);
+			    vec4 normal = texture(normals, iris_UV0, MipBias);
+			    vec4 properties = texture(specular, iris_UV0, MipBias);
 			}
 			""";
 
@@ -23,6 +26,15 @@ class IrisVirtualTileShaderContractTest {
 		assertTrue(patched.contains("uniform sampler2D u_AtlasStreamVirtualSpecular;"));
 		assertTrue(patched.contains("uniform sampler2D u_AtlasStreamVirtualPageTable;"));
 		assertTrue(patched.contains("bool atlasStreamVirtualLookup("));
+		assertTrue(patched.contains(
+			"atlasStreamSampleVirtualGtexture(iris_UV0, atlasStream_OriginalUv, MipBias)"
+		));
+		assertTrue(patched.contains(
+			"atlasStreamSampleVirtualNormals(iris_UV0, atlasStream_OriginalUv, MipBias)"
+		));
+		assertTrue(patched.contains(
+			"atlasStreamSampleVirtualSpecular(iris_UV0, atlasStream_OriginalUv, MipBias)"
+		));
 		assertEquals(patched, IrisVirtualTileShaderContract.patchFragment(patched));
 	}
 

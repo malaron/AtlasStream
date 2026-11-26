@@ -228,6 +228,7 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 				TEXCOORD_RETURN,
 				"return atlasStreamTerrainRemap(vec2(a_TexCoord & TEXTURE_MAX_VALUE) / float(TEXTURE_MAX_COORD));"
 			);
+			replaced = OriginalUvShaderContract.patchVertex(replaced);
 			// The sprite's mid coordinate is a separate attribute in layout space; packs compare it with the diffuse
 			// UV (for example to clamp to the sprite), so it has to move to the compact atlas as well.
 			int[] midCount = {0};
