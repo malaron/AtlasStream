@@ -98,6 +98,7 @@ public final class NearAtlas implements AutoCloseable {
 	private int shelfCursorY;
 	private boolean misalignedLogged;
 	private boolean overflowLogged;
+	private int overflowCount;
 	// Set when the compact atlas had no free slot; makes the next refresh evict sprites nobody needs.
 	private boolean slotsFull;
 	// Sprites that found no free slot. They stay in `requested` so nothing re-queues them until a slot is freed.
@@ -1235,7 +1236,7 @@ public final class NearAtlas implements AutoCloseable {
 		return List.of(
 			"Near sparse atlas" + (isHybrid() ? " (experimental hybrid)" : "") + ": "
 				+ residentSprites + " sprites resident, " + (jobs.size() + incoming.size() + compactPending.size() + retryIncoming.size())
-				+ " pending, " + evictedSprites + " evicted, " + failedSprites + " failed, " + waitingForSlot.size() + " waiting for a slot",
+				+ " pending, " + evictedSprites + " evicted, " + failedSprites + " failed, " + waitingForSlot.size() + " waiting for a slot, " + overflowCount + " slot overflows",
 			"Near animation: " + activeSprites.size() + " sprites active, " + uploadsPerSecond + " uploads/s, backlog avg "
 				+ String.format(java.util.Locale.ROOT, "%.0f", averageBacklog) + " peak " + displayedPeak,
 			"Near committed VRAM: " + String.format(java.util.Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024.0))
@@ -1503,11 +1504,12 @@ public final class NearAtlas implements AutoCloseable {
 		int[] slot = allocateSlot(slotW, slotH);
 		if (slot == null) {
 			slotsFull = true;
+			overflowCount++;
 			if (!overflowLogged) {
 				overflowLogged = true;
 				AtlasStream.LOGGER.warn(
-					"The compact near atlas ({}x{}) is full; sprites that do not fit stay unresolved until space is freed",
-					width, height
+					"The compact near atlas ({}x{}) is full placing {} (slot {}x{}); {} resident sprites, {} waiting. Further events are counted in the near-atlas stats",
+					width, height, sprite.contents().name(), slotW, slotH, resident.size(), waitingForSlot.size()
 				);
 			}
 			return null;
