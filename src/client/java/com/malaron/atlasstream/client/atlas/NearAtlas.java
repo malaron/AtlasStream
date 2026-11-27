@@ -109,6 +109,9 @@ public final class NearAtlas implements AutoCloseable {
 	private Set<TextureAtlasSprite> preferredSprites = Set.of();
 	private final NearMovementLookahead movementLookahead = new NearMovementLookahead();
 	private static final long PRESSURE_EVICT_BUDGET_NANOS = 6_000_000L;
+	private static final int LARGE_SLOT_MIN_SIDE = 512;
+	// One 1088-row shelf holds 15 large slots at 16384 wide; the atlas is sparse, so unused rows cost no VRAM.
+	private static final int LARGE_SHELF_RESERVE_ROWS = 1088;
 	private static final int MAX_PRESSURE_EVICTIONS_PER_REFRESH = 128;
 	private static final double PRESSURE_SWAP_MARGIN_BLOCKS = 8.0;
 	private final int mipLevels;
@@ -541,7 +544,10 @@ public final class NearAtlas implements AutoCloseable {
 				return slot;
 			}
 		}
-		if (shelfCursorY + h > height || w > width) {
+		// Small shelves stop at the reserve line so oversized sprites (entity sheets) can still start a shelf later.
+		boolean large = Math.min(w, h) >= LARGE_SLOT_MIN_SIDE;
+		int limit = large ? height : height - LARGE_SHELF_RESERVE_ROWS;
+		if (shelfCursorY + h > limit || w > width) {
 			return null;
 		}
 		shelves.add(new int[] {shelfCursorY, h, w});
