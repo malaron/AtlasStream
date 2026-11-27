@@ -220,18 +220,18 @@ public record LodConfig(
 		return "always".equalsIgnoreCase(properties.getProperty("virtualAtlas", "auto").trim());
 	}
 
-	// Hand-edited key (experimental): lets held and dropped block items stream from the virtual cache under Iris.
+	// Hand-edited key: set virtualItemsWithIris=false to make held and dropped block items skip the virtual cache under Iris.
 	public static boolean readVirtualItemsWithIris(Path file) {
 		if (!Files.exists(file)) {
-			return false;
+			return true;
 		}
 		Properties properties = new Properties();
 		try (InputStream input = Files.newInputStream(file)) {
 			properties.load(input);
 		} catch (IOException exception) {
-			return false;
+			return true;
 		}
-		return "true".equalsIgnoreCase(properties.getProperty("virtualItemsWithIris", "false").trim());
+		return !"false".equalsIgnoreCase(properties.getProperty("virtualItemsWithIris", "true").trim());
 	}
 
 	private static double readNumber(Properties properties, String key, double defaultValue) {
