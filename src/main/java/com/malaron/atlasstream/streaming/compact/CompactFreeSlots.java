@@ -4,22 +4,32 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class CompactFreeSlots {
+	public static final int LARGE_MIN_SIDE = 512;
+
 	private final List<Rect> free;
+	// Released oversized slots stay whole so small sprites cannot carve them up; only large requests reuse them.
+	private final List<Rect> large;
 
 	public CompactFreeSlots() {
 		free = new ArrayList<>();
+		large = new ArrayList<>();
 	}
 
-	private CompactFreeSlots(List<Rect> free) {
+	private CompactFreeSlots(List<Rect> free, List<Rect> large) {
 		this.free = new ArrayList<>(free);
+		this.large = new ArrayList<>(large);
+	}
+
+	public static boolean isLarge(int width, int height) {
+		return Math.min(width, height) >= LARGE_MIN_SIDE;
 	}
 
 	public CompactFreeSlots copy() {
-		return new CompactFreeSlots(free);
+		return new CompactFreeSlots(free, large);
 	}
 
 	public boolean isEmpty() {
-		return free.isEmpty();
+		return free.isEmpty() && large.isEmpty();
 	}
 
 	public int countFitting(int width, int height) {
@@ -29,12 +39,28 @@ public final class CompactFreeSlots {
 				count++;
 			}
 		}
+		if (isLarge(width, height)) {
+			for (Rect rect : large) {
+				if (rect.width == width && rect.height == height) {
+					count++;
+				}
+			}
+		}
 		return count;
 	}
 
 	public int[] allocate(int width, int height) {
 		if (width <= 0 || height <= 0) {
 			throw new IllegalArgumentException("Slot dimensions must be positive");
+		}
+		if (isLarge(width, height)) {
+			for (int i = 0; i < large.size(); i++) {
+				Rect rect = large.get(i);
+				if (rect.width == width && rect.height == height) {
+					large.remove(i);
+					return new int[] {rect.x, rect.y};
+				}
+			}
 		}
 		int best = -1;
 		long bestArea = Long.MAX_VALUE;
@@ -57,6 +83,15 @@ public final class CompactFreeSlots {
 			free.add(new Rect(rect.x, rect.y + height, rect.width, rect.height - height));
 		}
 		return new int[] {rect.x, rect.y};
+	}
+
+	// Returns a sprite's slot. Oversized slots are kept whole for oversized sprites.
+	public void releaseSlot(int x, int y, int width, int height) {
+		if (isLarge(width, height)) {
+			large.add(new Rect(x, y, width, height));
+		} else {
+			release(x, y, width, height);
+		}
 	}
 
 	public void release(int x, int y, int width, int height) {

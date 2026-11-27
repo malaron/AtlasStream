@@ -558,7 +558,7 @@ public final class NearAtlas implements AutoCloseable {
 
 	private void freeSlot(Geometry g) {
 		if (compact) {
-			freeSlots.release(g.x, g.y, g.slotW, g.slotH);
+			freeSlots.releaseSlot(g.x, g.y, g.slotW, g.slotH);
 		}
 	}
 
@@ -877,6 +877,7 @@ public final class NearAtlas implements AutoCloseable {
 				for (TextureAtlasSprite candidate : victims) {
 					Geometry g = resident.get(candidate);
 					if (g != null && g.slotW >= wantedWidth && g.slotH >= wantedHeight
+							&& CompactFreeSlots.isLarge(g.slotW, g.slotH) == CompactFreeSlots.isLarge(wantedWidth, wantedHeight)
 							&& canEvictFor(sprite, candidate)) {
 						victim = candidate;
 						break;
@@ -886,7 +887,7 @@ public final class NearAtlas implements AutoCloseable {
 					continue;
 				}
 				Geometry geometry = resident.get(victim);
-				free.release(geometry.x, geometry.y, geometry.slotW, geometry.slotH);
+				free.releaseSlot(geometry.x, geometry.y, geometry.slotW, geometry.slotH);
 				allocateFrom(free, key);
 				evict(victim, releasedPages);
 				if (needed.contains(victim)) {
