@@ -24,7 +24,7 @@ public abstract class FirstPersonItemSpriteMixin {
 		BakedQuad.MaterialInfo material = quad.materialInfo();
 		if (submit.displayContext().firstPerson()) {
 			ItemStreamDiagnostics.recordSprite(material.sprite());
-			if (AtlasRuntimeState.useVirtualTextureForItemDraw() && !SodiumTerrainIntegration.isIrisShaderPackInUse()) {
+			if (AtlasRuntimeState.streamsVirtualItemTiles()) {
 				AtlasRuntimeState.recordSpriteUsage(material.sprite());
 			}
 		}

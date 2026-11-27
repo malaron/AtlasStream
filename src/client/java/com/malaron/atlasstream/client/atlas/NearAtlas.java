@@ -1231,9 +1231,43 @@ public final class NearAtlas implements AutoCloseable {
 		return blended;
 	}
 
+	private String slotSizeSummary() {
+		java.util.TreeMap<Long, int[]> residentBySize = new java.util.TreeMap<>();
+		for (Geometry g : resident.values()) {
+			residentBySize.computeIfAbsent(((long) g.slotW << 32) | g.slotH, k -> new int[1])[0]++;
+		}
+		java.util.TreeMap<Long, int[]> waitingBySize = new java.util.TreeMap<>();
+		for (TextureAtlasSprite sprite : waitingForSlot) {
+			waitingBySize.computeIfAbsent(slotKey(sprite), k -> new int[1])[0]++;
+		}
+		return "resident " + formatSizes(residentBySize) + "; waiting " + formatSizes(waitingBySize);
+	}
+
+	private static String formatSizes(java.util.Map<Long, int[]> bySize) {
+		StringBuilder out = new StringBuilder();
+		long totalArea = 0;
+		for (java.util.Map.Entry<Long, int[]> entry : bySize.entrySet()) {
+			long w = entry.getKey() >>> 32;
+			long h = entry.getKey() & 0xFFFFFFFFL;
+			totalArea += w * h * entry.getValue()[0];
+		}
+		for (java.util.Map.Entry<Long, int[]> entry : bySize.entrySet()) {
+			long w = entry.getKey() >>> 32;
+			long h = entry.getKey() & 0xFFFFFFFFL;
+			long area = w * h * entry.getValue()[0];
+			if (out.length() > 0) {
+				out.append(", ");
+			}
+			out.append(entry.getValue()[0]).append("x").append(w).append("x").append(h)
+				.append(" (").append(totalArea == 0 ? 0 : Math.round(100.0 * area / totalArea)).append("%)");
+		}
+		return out.length() == 0 ? "none" : out.toString();
+	}
+
 	public List<String> debugLines() {
 		long bytes = committedBytes();
 		return List.of(
+			"Near slot sizes: " + slotSizeSummary(),
 			"Near sparse atlas" + (isHybrid() ? " (experimental hybrid)" : "") + ": "
 				+ residentSprites + " sprites resident, " + (jobs.size() + incoming.size() + compactPending.size() + retryIncoming.size())
 				+ " pending, " + evictedSprites + " evicted, " + failedSprites + " failed, " + waitingForSlot.size() + " waiting for a slot, " + overflowCount + " slot overflows",
