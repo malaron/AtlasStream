@@ -594,6 +594,17 @@ public final class AtlasRuntimeState {
 		guiItemDraw = value;
 	}
 
+	private static final class VirtualItemsWithIris {
+		static final boolean ENABLED = com.malaron.atlasstream.lod.LodConfig.readVirtualItemsWithIris(
+			com.malaron.atlasstream.client.AtlasStreamClient.configFile());
+	}
+
+	// Item draws stream virtual tiles without a shader pack, and with one only when the experimental key is set.
+	public static boolean streamsVirtualItemTiles() {
+		return useVirtualTextureForItemDraw()
+			&& (!SodiumTerrainIntegration.isIrisShaderPackInUse() || VirtualItemsWithIris.ENABLED);
+	}
+
 	public static boolean useVirtualTextureForItemDraw() {
 		return !guiItemDraw && isDistancePreviewEnabled() && virtualTextureGpuCache != null
 			&& virtualTextureGpuPageTable != null && virtualTextureMetadataTexture != null;
@@ -868,8 +879,7 @@ public final class AtlasRuntimeState {
 		if (near != null && !guiItemDraw && TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
 			near.touch(sprite);
 		}
-		if (!TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation()) || !useVirtualTextureForItemDraw()
-				|| SodiumTerrainIntegration.isIrisShaderPackInUse()) {
+		if (!TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation()) || !streamsVirtualItemTiles()) {
 			return;
 		}
 		if (itemSpriteGeneration != generation) {

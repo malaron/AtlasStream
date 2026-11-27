@@ -72,8 +72,7 @@ public abstract class PreparedItemVirtualTextureMixin {
 			return RenderSystem.getCompiledPipeline(pipeline);
 		}
 		atlasStream$virtualItem = true;
-		atlasStream$streamTiles = AtlasRuntimeState.useVirtualTextureForItemDraw()
-			&& !SodiumTerrainIntegration.isIrisShaderPackInUse();
+		atlasStream$streamTiles = AtlasRuntimeState.streamsVirtualItemTiles();
 		ItemStreamDiagnostics.recordDraw(name() + (atlasStream$streamTiles ? " virtual" : " remapped"));
 		return compiled;
 	}
