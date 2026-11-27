@@ -8,6 +8,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CancellationException;
@@ -36,6 +37,7 @@ import com.malaron.atlasstream.streaming.VirtualTextureRequestTracker;
 import com.malaron.atlasstream.streaming.VirtualTextureTileBuilder.MipImage;
 import com.malaron.atlasstream.streaming.VirtualTextureTileBuilder.SpriteSource;
 import com.malaron.atlasstream.streaming.VirtualTextureTileBuilder.TileMip;
+import com.malaron.atlasstream.streaming.VirtualTextureTileBundleBuilder;
 import com.malaron.atlasstream.streaming.VirtualTextureTileBuilder;
 import com.malaron.atlasstream.streaming.VirtualTextureTileKey;
 import com.malaron.atlasstream.streaming.VirtualTextureTileRequestQueue;
@@ -62,6 +64,7 @@ import net.minecraft.server.packs.resources.ResourceManager;
 
 public final class AtlasRuntimeState {
 	private static final int VIRTUAL_TILE_SIZE = 128;
+	private static final long IRIS_VIRTUAL_CACHE_BUDGET_BYTES = 768L * 1024 * 1024;
 	private static final long MAX_PREVIEW_BYTES = 2048L * 1024 * 1024;
 	private static final long MAX_ANIMATION_BLEND_CACHE_BYTES = 32L * 1024 * 1024;
 	private static final AnimationBlendCache<AnimationBlendKey, List<NativeImage>> animationBlendCache =
@@ -103,6 +106,7 @@ public final class AtlasRuntimeState {
 	private static final Set<String> CONDUIT_REMAP_LOGGED = new HashSet<>();
 	private static volatile VirtualTextureGpuPageTable virtualTextureGpuPageTable;
 	private static volatile VirtualTextureTileBuilder virtualTextureTileBuilder;
+	private static volatile VirtualTextureTileBundleBuilder virtualTextureTileBundleBuilder;
 	private static volatile VirtualTextureGpuCache virtualTextureGpuCache;
 	private static volatile VirtualTextureLayout virtualTextureLayout;
 	private static VirtualTextureMetadataTexture virtualTextureMetadataTexture;
@@ -710,12 +714,75 @@ public final class AtlasRuntimeState {
 		if (cache == null) {
 			return "Virtual texture cache unavailable";
 		}
+
 		return "cache=" + cache.size() + " tiles, " + cache.usedBytes() / 1024 + "/"
 			+ cache.capacityBytes() / 1024 + " KiB, evictions=" + cache.evictionCount()
 			+ ", pending tiles=" + pendingVirtualTextureTiles.size()
 			+ ", loading=" + loadingTiles.size()
 			+ ", pending quads=" + (VIRTUAL_TEXTURE_REQUEST_TRACKER.pendingCount() + pendingVirtualTextureQuads.pendingCount())
 			+ ", refresh counter=" + streamRerequestCounter;
+	}
+
+	public static synchronized List<String> virtualTextureTileProof(TextureAtlasSprite sprite) {
+		VirtualTextureGpuPageTable pageTable = virtualTextureGpuPageTable;
+		VirtualTextureGpuCache cache = virtualTextureGpuCache;
+		VirtualTextureLayout layout = virtualTextureLayout;
+		VirtualTextureTileBundleBuilder bundleBuilder = virtualTextureTileBundleBuilder;
+		if (pageTable == null || cache == null || layout == null || bundleBuilder == null) {
+			throw new IllegalStateException("Virtual texture proof resources are unavailable");
+		}
+		int atlasX = (int) ((sprite.getU0() + sprite.getU1()) * 0.5
+			* ((TextureAtlasAccessor) previewedAtlas).atlasStream$getWidth());
+		int atlasY = (int) ((sprite.getV0() + sprite.getV1()) * 0.5
+			* ((TextureAtlasAccessor) previewedAtlas).atlasStream$getHeight());
+		VirtualTextureTileKey key = layout.address(
+			generation, 0, atlasX / (double) ((TextureAtlasAccessor) previewedAtlas).atlasStream$getWidth(),
+			atlasY / (double) ((TextureAtlasAccessor) previewedAtlas).atlasStream$getHeight()
+		).key();
+		Integer slot = cache.get(key);
+		if (slot == null) {
+			int cacheMipLevels = Math.min(
+				Integer.numberOfTrailingZeros(VIRTUAL_TILE_SIZE) + 1,
+				pageTable.layout().mipLevelCount()
+			);
+			try (NativeTileBundle images = buildTileBundle(key, cacheMipLevels)) {
+				slot = cache.upload(
+					key, images.albedo(), images.normal(), images.specular(), 0.0
+				);
+			}
+		}
+		int localX = atlasX - key.tileX() * VIRTUAL_TILE_SIZE;
+		int localY = atlasY - key.tileY() * VIRTUAL_TILE_SIZE;
+		int expectedPage = pageTable.layout().pixelColorAt(
+			pageTable.layout().pixelX(key), pageTable.layout().pixelY(key)
+		);
+		int gpuPage = pageTable.debugReadPixel(key);
+		int[] gpuPixels = cache.debugReadResidentPixels(key, localX, localY);
+		var bundle = bundleBuilder.build(key, 1);
+		int expectedAlbedo = bundle.albedo().get(0).pixel(localX, localY);
+		int expectedNormal = bundle.normal().get(0).pixel(localX, localY);
+		int expectedSpecular = bundle.specular().get(0).pixel(localX, localY);
+		return List.of(
+			"sprite=" + sprite.contents().name() + " atlasPixel=" + atlasX + "," + atlasY
+				+ " key=" + key + " local=" + localX + "," + localY,
+			"slot cpu=" + slot + " page cpu=" + rgbaHex(expectedPage) + " gpu=" + rgbaHex(gpuPage)
+				+ " decodedGpu=" + decodePageSlot(gpuPage),
+			"pixels source a/n/s=" + rgbaHex(expectedAlbedo) + "/" + rgbaHex(expectedNormal)
+				+ "/" + rgbaHex(expectedSpecular)
+				+ " gpu a/n/s=" + (gpuPixels == null
+					? "not-resident"
+					: rgbaHex(gpuPixels[0]) + "/" + rgbaHex(gpuPixels[1]) + "/" + rgbaHex(gpuPixels[2]))
+		);
+	}
+
+	private static int decodePageSlot(int rgba) {
+		return (rgba >>> 16 & 0xFF)
+			| (rgba >>> 8 & 0xFF) << 8
+			| (rgba & 0xFF) << 16;
+	}
+
+	private static String rgbaHex(int value) {
+		return String.format(java.util.Locale.ROOT, "%08X", value);
 	}
 
 	public static long guiItemAtlasRevision() {
@@ -1050,8 +1117,56 @@ public final class AtlasRuntimeState {
 			}
 			AnimatedTile snapshot = snapshotAnimatedTile(builder, key);
 			loadingTiles.put(key, new PreparedTile(snapshot, animatedTileExecutor.submit(
-				() -> buildTileImages(builder, key, cacheMipLevels)
+				() -> {
+					NativeTileBundle images = buildTileBundle(key, cacheMipLevels);
+					LodPerformanceStats.recordTileBuilt();
+					return images;
+				}
 			), request.distanceSquared()));
+		}
+	}
+
+	private static NativeTileBundle buildTileBundle(VirtualTextureTileKey key, int cacheMipLevels) {
+		VirtualTextureTileBundleBuilder builder = virtualTextureTileBundleBuilder;
+		if (builder == null) {
+			throw new IllegalStateException("Virtual PBR tile builders are unavailable");
+		}
+		var bundle = builder.build(key, cacheMipLevels);
+		List<NativeImage> albedo = buildNativeImages(bundle.albedo());
+		List<NativeImage> normal = null;
+		List<NativeImage> specular = null;
+		try {
+			normal = buildNativeImages(bundle.normal());
+			specular = buildNativeImages(bundle.specular());
+			return new NativeTileBundle(albedo, normal, specular);
+		} catch (RuntimeException | Error exception) {
+			closeImages(albedo);
+			if (normal != null) {
+				closeImages(normal);
+			}
+			if (specular != null) {
+				closeImages(specular);
+			}
+			throw exception;
+		}
+	}
+
+	private static List<NativeImage> buildNativeImages(List<TileMip> builtMips) {
+		List<NativeImage> images = new ArrayList<>(builtMips.size());
+		try {
+			for (TileMip mip : builtMips) {
+				NativeImage image = new NativeImage(mip.width(), mip.height(), true);
+				images.add(image);
+				for (int y = 0; y < mip.height(); y++) {
+					for (int x = 0; x < mip.width(); x++) {
+						image.setPixel(x, y, mip.pixel(x, y));
+					}
+				}
+			}
+			return images;
+		} catch (RuntimeException | Error exception) {
+			closeImages(images);
+			throw exception;
 		}
 	}
 
@@ -1093,21 +1208,26 @@ public final class AtlasRuntimeState {
 				continue;
 			}
 			iterator.remove();
-			List<NativeImage> images = null;
+			NativeTileBundle images = null;
 			try {
 				images = entry.getValue().images().get();
 				if (!cache.noteDemand(entry.getKey(), entry.getValue().distanceSquared())
-						&& cache.upload(entry.getKey(), images, entry.getValue().distanceSquared()) >= 0) {
+						&& cache.upload(
+							entry.getKey(),
+							images.albedo(), images.normal(), images.specular(),
+							entry.getValue().distanceSquared()
+						) >= 0) {
 					if (!entry.getValue().snapshot().names().isEmpty()) {
 						animatedTiles.put(entry.getKey(), entry.getValue().snapshot());
 					}
 					uploads++;
+					LodPerformanceStats.recordTileUploaded();
 				}
 			} catch (Exception exception) {
 				AtlasStream.LOGGER.error("Could not stream virtual texture tile {}", entry.getKey(), exception);
 			} finally {
 				if (images != null) {
-					closeImages(images);
+					images.close();
 				}
 			}
 		}
@@ -1117,10 +1237,21 @@ public final class AtlasRuntimeState {
 	}
 
 	private record PreparedTile(
-		AnimatedTile snapshot, java.util.concurrent.Future<List<NativeImage>> images, double distanceSquared
+		AnimatedTile snapshot, java.util.concurrent.Future<NativeTileBundle> images, double distanceSquared
 	) {
-		private PreparedTile(AnimatedTile snapshot, java.util.concurrent.Future<List<NativeImage>> images) {
+		private PreparedTile(AnimatedTile snapshot, java.util.concurrent.Future<NativeTileBundle> images) {
 			this(snapshot, images, Double.POSITIVE_INFINITY);
+		}
+	}
+
+	private record NativeTileBundle(
+		List<NativeImage> albedo, List<NativeImage> normal, List<NativeImage> specular
+	) implements AutoCloseable {
+		@Override
+		public void close() {
+			closeImages(albedo);
+			closeImages(normal);
+			closeImages(specular);
 		}
 	}
 
@@ -1129,7 +1260,7 @@ public final class AtlasRuntimeState {
 			for (PreparedTile prepared : tiles.values()) {
 				animatedTileExecutor.submit(() -> {
 					try {
-						closeImages(prepared.images().get());
+						prepared.images().get().close();
 					} catch (Exception ignored) {
 						// The build failed or was interrupted, so there is nothing to close.
 					}
@@ -1154,10 +1285,12 @@ public final class AtlasRuntimeState {
 				continue;
 			}
 			iterator.remove();
-			List<NativeImage> images = null;
+			NativeTileBundle images = null;
 			try {
 				images = entry.getValue().images().get();
-				if (cache.update(entry.getKey(), images)) {
+				if (cache.update(
+						entry.getKey(), images.albedo(), images.normal(), images.specular()
+				)) {
 					animatedTiles.put(entry.getKey(), entry.getValue().snapshot());
 					uploads++;
 				}
@@ -1165,7 +1298,7 @@ public final class AtlasRuntimeState {
 				AtlasStream.LOGGER.error("Could not update animated virtual texture tile {}", entry.getKey(), exception);
 			} finally {
 				if (images != null) {
-					closeImages(images);
+					images.close();
 				}
 			}
 		}
@@ -1211,25 +1344,10 @@ public final class AtlasRuntimeState {
 				break;
 			}
 			AnimatedTile snapshot = snapshotAnimatedTile(builder, key);
-			preparingTiles.put(key, new PreparedTile(snapshot, animatedTileExecutor.submit(() -> {
-				List<TileMip> builtMips = builder.build(key, cacheMipLevels);
-				List<NativeImage> images = new ArrayList<>(builtMips.size());
-				try {
-					for (TileMip mip : builtMips) {
-						NativeImage image = new NativeImage(mip.width(), mip.height(), true);
-						images.add(image);
-						for (int y = 0; y < mip.height(); y++) {
-							for (int x = 0; x < mip.width(); x++) {
-								image.setPixel(x, y, mip.pixel(x, y));
-							}
-						}
-					}
-					return images;
-				} catch (RuntimeException exception) {
-					closeImages(images);
-					throw exception;
-				}
-			})));
+			preparingTiles.put(key, new PreparedTile(
+				snapshot,
+				animatedTileExecutor.submit(() -> buildTileBundle(key, cacheMipLevels))
+			));
 			// Moves the tile to the back so a backlog is worked through fairly.
 			AnimatedTile existing = animatedTiles.remove(key);
 			if (existing != null) {
@@ -1257,25 +1375,12 @@ public final class AtlasRuntimeState {
 			Integer.numberOfTrailingZeros(VIRTUAL_TILE_SIZE) + 1,
 			virtualTextureGpuPageTable.layout().mipLevelCount()
 		);
-		List<TileMip> builtMips = builder.build(key, cacheMipLevels);
-		List<NativeImage> images = new ArrayList<>(builtMips.size());
-		try {
-			for (TileMip mip : builtMips) {
-				NativeImage image = new NativeImage(mip.width(), mip.height(), true);
-				images.add(image);
-				for (int y = 0; y < mip.height(); y++) {
-					for (int x = 0; x < mip.width(); x++) {
-						image.setPixel(x, y, mip.pixel(x, y));
-					}
-				}
-			}
+		try (NativeTileBundle images = buildTileBundle(key, cacheMipLevels)) {
 			if (replace) {
-				cache.update(key, images);
+				cache.update(key, images.albedo(), images.normal(), images.specular());
 				return -1;
 			}
-			return cache.upload(key, images);
-		} finally {
-			closeImages(images);
+			return cache.upload(key, images.albedo(), images.normal(), images.specular(), Double.POSITIVE_INFINITY);
 		}
 	}
 
@@ -1424,16 +1529,29 @@ public final class AtlasRuntimeState {
 			boolean wanted = key.mipLevel() < lowAtlasMip
 				&& effectiveDistance <= (STREAM_MIP0_BLOCKS << key.mipLevel());
 			if (wanted && !animatedVirtualTextureTiles.contains(key)) {
+				LodPerformanceStats.recordTileRequested();
 				VirtualTextureGpuCache cache = virtualTextureGpuCache;
 				if (cache != null) {
-					if (!cache.noteDemand(key, activeVirtualTextureDistanceSquared)) {
+					if (cache.noteDemand(key, activeVirtualTextureDistanceSquared)) {
+						LodPerformanceStats.recordTileResident();
+					} else {
 						PreparedTile loading = loadingTiles.get(key);
-						if (loading != null && activeVirtualTextureDistanceSquared < loading.distanceSquared()) {
-							loadingTiles.put(key, new PreparedTile(
-								loading.snapshot(), loading.images(), activeVirtualTextureDistanceSquared
-							));
-						} else if (loading == null && cache.canAdmit(key, activeVirtualTextureDistanceSquared)) {
-							pendingVirtualTextureTiles.offer(key, activeVirtualTextureDistanceSquared);
+						if (loading != null) {
+							LodPerformanceStats.recordTileLoading();
+							if (activeVirtualTextureDistanceSquared < loading.distanceSquared()) {
+								loadingTiles.put(key, new PreparedTile(
+									loading.snapshot(), loading.images(), activeVirtualTextureDistanceSquared
+								));
+							}
+						} else if (!cache.canAdmit(key, activeVirtualTextureDistanceSquared)) {
+							LodPerformanceStats.recordTileAdmissionBlocked(
+								Math.sqrt(activeVirtualTextureDistanceSquared),
+								AtlasStreamClient.getConfig().highResolutionDistance()
+							);
+						} else if (pendingVirtualTextureTiles.offer(key, activeVirtualTextureDistanceSquared)) {
+							LodPerformanceStats.recordTileQueued();
+						} else {
+							LodPerformanceStats.recordTileQueueRejected();
 						}
 					}
 				}
@@ -1633,6 +1751,38 @@ public final class AtlasRuntimeState {
 		}
 		try {
 			return (Integer) texture.getClass().getMethod("iris$getGlId").invoke(texture);
+		} catch (ReflectiveOperationException | RuntimeException exception) {
+			return nearPlaceholderGlId();
+		}
+	}
+
+	public static int virtualAlbedoGlId() {
+		VirtualTextureGpuCache cache = virtualTextureGpuCache;
+		return cache != null && isDistancePreviewEnabled() ? cache.textureGlId() : nearPlaceholderGlId();
+	}
+
+	public static int virtualNormalGlId() {
+		VirtualTextureGpuCache cache = virtualTextureGpuCache;
+		return cache != null && isDistancePreviewEnabled() ? cache.normalTextureGlId() : nearPlaceholderGlId();
+	}
+
+	public static int virtualSpecularGlId() {
+		VirtualTextureGpuCache cache = virtualTextureGpuCache;
+		return cache != null && isDistancePreviewEnabled() ? cache.specularTextureGlId() : nearPlaceholderGlId();
+	}
+
+	public static int virtualPageTableGlId() {
+		VirtualTextureGpuPageTable pageTable = virtualTextureGpuPageTable;
+		return pageTable != null && isDistancePreviewEnabled() ? pageTable.glId() : nearPlaceholderGlId();
+	}
+
+	public static int virtualMetadataGlId() {
+		VirtualTextureMetadataTexture metadata = virtualTextureMetadataTexture;
+		if (metadata == null || !isDistancePreviewEnabled()) {
+			return nearPlaceholderGlId();
+		}
+		try {
+			return (Integer) metadata.texture().getClass().getMethod("iris$getGlId").invoke(metadata.texture());
 		} catch (ReflectiveOperationException | RuntimeException exception) {
 			return nearPlaceholderGlId();
 		}
@@ -2924,15 +3074,17 @@ public final class AtlasRuntimeState {
 				long mipSize = Math.max(1, VIRTUAL_TILE_SIZE >> mip);
 				minimumCacheBytes = Math.addExact(minimumCacheBytes, mipSize * mipSize * 4);
 			}
-			// Iris terrain never samples virtual tiles, so keep the cache at its minimum size.
+			// Iris sampling is not enabled yet, but exercise its request/build/upload path with a bounded fixed cache.
+			// This tier remains intentionally small until all three PBR surfaces use one atomic residency lifecycle.
 			long cacheBudgetBytes = SodiumTerrainIntegration.isIrisShaderPackInUse()
-				? minimumCacheBytes
+				? Math.max(minimumCacheBytes, IRIS_VIRTUAL_CACHE_BUDGET_BYTES)
 				: Math.max(minimumCacheBytes, Math.min(configuredBudgetBytes, atlasBudgetBytes));
 			tileCache = new VirtualTextureGpuCache(
 				pageTable,
 				VIRTUAL_TILE_SIZE,
 				cacheMipLevels,
-				cacheBudgetBytes
+				cacheBudgetBytes,
+				true
 			);
 			metadataTexture = createVirtualTextureMetadata(atlasWidth, atlasHeight, atlasMipLevels);
 			VirtualTextureTileBuilder tileBuilder = createVirtualTextureTileBuilder(
@@ -2943,10 +3095,24 @@ public final class AtlasRuntimeState {
 				atlasMipLevels,
 				generation
 			);
+			VirtualTextureTileBundleBuilder tileBundleBuilder = new VirtualTextureTileBundleBuilder(
+				tileBuilder,
+				createVirtualTexturePbrTileBuilder(
+					regions, atlasWidth, atlasHeight, atlasMipLevels, generation,
+					Minecraft.getInstance().getResourceManager(),
+					"_n", 0xFF8080FF, IrisPbrAtlasReducer::averageNormal
+				),
+				createVirtualTexturePbrTileBuilder(
+					regions, atlasWidth, atlasHeight, atlasMipLevels, generation,
+					Minecraft.getInstance().getResourceManager(),
+					"_s", 0, IrisPbrAtlasReducer::averageSpecular
+				)
+			);
 			lowResolutionTexture = texture;
 			lowResolutionTextureView = textureView;
 			virtualTextureGpuPageTable = pageTable;
 			virtualTextureTileBuilder = tileBuilder;
+			virtualTextureTileBundleBuilder = tileBundleBuilder;
 			virtualTextureGpuCache = tileCache;
 			virtualTextureMetadataTexture = metadataTexture;
 			virtualTextureLayout = new VirtualTextureLayout(
@@ -3329,6 +3495,7 @@ public final class AtlasRuntimeState {
 			cache.close();
 		}
 		virtualTextureTileBuilder = null;
+		virtualTextureTileBundleBuilder = null;
 		VirtualTextureGpuPageTable pageTable = virtualTextureGpuPageTable;
 		virtualTextureGpuPageTable = null;
 		if (pageTable != null) {
@@ -3580,6 +3747,177 @@ public final class AtlasRuntimeState {
 			return strip == null ? null : strip.frame(state, mipLevel);
 		});
 		return builder;
+	}
+
+	private static VirtualTextureTileBuilder createVirtualTexturePbrTileBuilder(
+		List<SpriteRegion> regions,
+		int atlasWidth,
+		int atlasHeight,
+		int mipLevelCount,
+		long atlasGeneration,
+		ResourceManager resourceManager,
+		String suffix,
+		int defaultPixel,
+		PixelAverager averager
+	) {
+		List<SpriteSource> sources = new ArrayList<>(regions.size());
+		for (SpriteRegion region : regions) {
+			LazyPbrSpriteMips lazy = new LazyPbrSpriteMips(
+				resourceManager, region.identifier(), suffix, defaultPixel, averager,
+				region.width(), region.height(), mipLevelCount
+			);
+			List<MipImage> images = new ArrayList<>(mipLevelCount);
+			for (int level = 0; level < mipLevelCount; level++) {
+				images.add(lazy.image(level));
+			}
+			sources.add(new SpriteSource(
+				region.identifier().toString(),
+				region.x(), region.y(), region.width(), region.height(),
+				region.paddingX(), region.paddingY(), false, images
+			));
+		}
+		return new VirtualTextureTileBuilder(
+			atlasWidth, atlasHeight, VIRTUAL_TILE_SIZE, mipLevelCount, atlasGeneration, sources
+		);
+	}
+
+	private static final class LazyPbrSpriteMips {
+		private static final java.util.concurrent.atomic.AtomicInteger DIMENSION_MISMATCHES =
+			new java.util.concurrent.atomic.AtomicInteger();
+		private final ResourceManager resourceManager;
+		private final Identifier identifier;
+		private final String suffix;
+		private final int defaultPixel;
+		private final PixelAverager averager;
+		private final int width;
+		private final int height;
+		private final int mipLevelCount;
+		private volatile int[][] levels;
+
+		private LazyPbrSpriteMips(
+			ResourceManager resourceManager,
+			Identifier identifier,
+			String suffix,
+			int defaultPixel,
+			PixelAverager averager,
+			int width,
+			int height,
+			int mipLevelCount
+		) {
+			this.resourceManager = resourceManager;
+			this.identifier = identifier;
+			this.suffix = suffix;
+			this.defaultPixel = defaultPixel;
+			this.averager = averager;
+			this.width = width;
+			this.height = height;
+			this.mipLevelCount = mipLevelCount;
+		}
+
+		private MipImage image(int mipLevel) {
+			return new MipImage() {
+				@Override
+				public int width() {
+					return Math.max(1, width >> mipLevel);
+				}
+
+				@Override
+				public int height() {
+					return Math.max(1, height >> mipLevel);
+				}
+
+				@Override
+				public int pixel(int x, int y) {
+					return getLevels()[mipLevel][y * width() + x];
+				}
+			};
+		}
+
+		private int[][] getLevels() {
+			int[][] loaded = levels;
+			if (loaded == null) {
+				synchronized (this) {
+					loaded = levels;
+					if (loaded == null) {
+						loaded = build();
+						levels = loaded;
+					}
+				}
+			}
+			return loaded;
+		}
+
+		private int[][] build() {
+			int[][] result = new int[mipLevelCount][];
+			int currentWidth = Math.max(1, width);
+			int currentHeight = Math.max(1, height);
+			int[] current = new int[currentWidth * currentHeight];
+			java.util.Arrays.fill(current, defaultPixel);
+			Identifier resourceId = Identifier.fromNamespaceAndPath(
+				identifier.getNamespace(), "textures/" + identifier.getPath() + suffix + ".png"
+			);
+			Optional<Resource> resource = resourceManager.getResource(resourceId);
+			if (resource.isPresent()) {
+				try (InputStream input = resource.get().open(); NativeImage source = NativeImage.read(input)) {
+					int expectedFrameHeight = Math.max(
+						1,
+						(int) ((long) source.getWidth() * currentHeight / currentWidth)
+					);
+					int frameHeight = Math.min(
+						source.getHeight(),
+						expectedFrameHeight
+					);
+					if ((source.getWidth() != currentWidth || frameHeight != currentHeight
+							|| source.getHeight() != frameHeight)
+							&& DIMENSION_MISMATCHES.getAndIncrement() < 100) {
+						AtlasStream.LOGGER.warn(
+							"Virtual PBR source geometry for {}{} is {}x{}; atlas frame is {}x{} "
+								+ "(expected strip frame height {})",
+							identifier, suffix, source.getWidth(), source.getHeight(),
+							currentWidth, currentHeight, expectedFrameHeight
+						);
+					}
+					for (int y = 0; y < currentHeight; y++) {
+						for (int x = 0; x < currentWidth; x++) {
+							current[y * currentWidth + x] = source.getPixel(
+								x * source.getWidth() / currentWidth,
+								y * frameHeight / currentHeight
+							);
+						}
+					}
+				} catch (IOException | RuntimeException exception) {
+					AtlasStream.LOGGER.warn(
+						"Leaving virtual PBR sprite {} at its default: {}",
+						resourceId, exception.getMessage()
+					);
+				}
+			}
+			result[0] = current;
+			for (int level = 1; level < mipLevelCount; level++) {
+				int nextWidth = Math.max(1, currentWidth >> 1);
+				int nextHeight = Math.max(1, currentHeight >> 1);
+				int[] next = new int[nextWidth * nextHeight];
+				for (int y = 0; y < nextHeight; y++) {
+					int y0 = y * 2;
+					int y1 = Math.min(currentHeight - 1, y0 + 1);
+					for (int x = 0; x < nextWidth; x++) {
+						int x0 = x * 2;
+						int x1 = Math.min(currentWidth - 1, x0 + 1);
+						next[y * nextWidth + x] = averager.average(
+							current[y0 * currentWidth + x0],
+							current[y0 * currentWidth + x1],
+							current[y1 * currentWidth + x0],
+							current[y1 * currentWidth + x1]
+						);
+					}
+				}
+				result[level] = next;
+				current = next;
+				currentWidth = nextWidth;
+				currentHeight = nextHeight;
+			}
+			return result;
+		}
 	}
 
 	// The full-resolution frame strip of an animated sprite. A frame is a view into the strip, not a copy.

@@ -98,6 +98,7 @@ public final class NearAtlas implements AutoCloseable {
 	private int shelfCursorY;
 	private boolean misalignedLogged;
 	private boolean overflowLogged;
+	private int overflowCount;
 	// Set when the compact atlas had no free slot; makes the next refresh evict sprites nobody needs.
 	private boolean slotsFull;
 	// Sprites that found no free slot. They stay in `requested` so nothing re-queues them until a slot is freed.
@@ -109,6 +110,9 @@ public final class NearAtlas implements AutoCloseable {
 	private Set<TextureAtlasSprite> preferredSprites = Set.of();
 	private final NearMovementLookahead movementLookahead = new NearMovementLookahead();
 	private static final long PRESSURE_EVICT_BUDGET_NANOS = 6_000_000L;
+	private static final int LARGE_SLOT_MIN_SIDE = 512;
+	// One 1088-row shelf holds 15 large slots at 16384 wide; the atlas is sparse, so unused rows cost no VRAM.
+	private static final int LARGE_SHELF_RESERVE_ROWS = 1088;
 	private static final int MAX_PRESSURE_EVICTIONS_PER_REFRESH = 128;
 	private static final double PRESSURE_SWAP_MARGIN_BLOCKS = 8.0;
 	private final int mipLevels;
@@ -541,7 +545,10 @@ public final class NearAtlas implements AutoCloseable {
 				return slot;
 			}
 		}
-		if (shelfCursorY + h > height || w > width) {
+		// Small shelves stop at the reserve line so oversized sprites (entity sheets) can still start a shelf later.
+		boolean large = Math.min(w, h) >= LARGE_SLOT_MIN_SIDE;
+		int limit = large ? height : height - LARGE_SHELF_RESERVE_ROWS;
+		if (shelfCursorY + h > limit || w > width) {
 			return null;
 		}
 		shelves.add(new int[] {shelfCursorY, h, w});
@@ -552,7 +559,7 @@ public final class NearAtlas implements AutoCloseable {
 
 	private void freeSlot(Geometry g) {
 		if (compact) {
-			freeSlots.release(g.x, g.y, g.slotW, g.slotH);
+			freeSlots.releaseSlot(g.x, g.y, g.slotW, g.slotH);
 		}
 	}
 
@@ -852,6 +859,7 @@ public final class NearAtlas implements AutoCloseable {
 		try {
 			CompactFreeSlots free = freeSlots.copy();
 			reserveRetries(free);
+			Set<Long> releasedPages = new java.util.HashSet<>();
 			int evictions = 0;
 			for (TextureAtlasSprite sprite : waiting) {
 				if (evictions >= MAX_PRESSURE_EVICTIONS_PER_REFRESH || System.nanoTime() >= deadline) {
@@ -870,6 +878,7 @@ public final class NearAtlas implements AutoCloseable {
 				for (TextureAtlasSprite candidate : victims) {
 					Geometry g = resident.get(candidate);
 					if (g != null && g.slotW >= wantedWidth && g.slotH >= wantedHeight
+							&& CompactFreeSlots.isLarge(g.slotW, g.slotH) == CompactFreeSlots.isLarge(wantedWidth, wantedHeight)
 							&& canEvictFor(sprite, candidate)) {
 						victim = candidate;
 						break;
@@ -879,9 +888,9 @@ public final class NearAtlas implements AutoCloseable {
 					continue;
 				}
 				Geometry geometry = resident.get(victim);
-				free.release(geometry.x, geometry.y, geometry.slotW, geometry.slotH);
+				free.releaseSlot(geometry.x, geometry.y, geometry.slotW, geometry.slotH);
 				allocateFrom(free, key);
-				evict(victim);
+				evict(victim, releasedPages);
 				if (needed.contains(victim)) {
 					// Still wanted, but farther than the sprite taking its slot: queue it behind nearer ones
 					// instead of letting the next refresh re-request it and win the slot back.
@@ -890,6 +899,7 @@ public final class NearAtlas implements AutoCloseable {
 				}
 				evictions++;
 			}
+			uncommitReleased(releasedPages);
 			checkGl("releasing sparse pages");
 		} catch (IllegalStateException exception) {
 			AtlasStream.LOGGER.error("Could not release near sprites", exception);
@@ -926,7 +936,7 @@ public final class NearAtlas implements AutoCloseable {
 		long deadline = System.nanoTime() + EVICT_BUDGET_NANOS;
 		try {
 			for (int i = 0; i < victims.size() && i < MAX_EVICTIONS_PER_REFRESH && (off || committedBytes() > target); i++) {
-				evict(victims.get(i));
+				evict(victims.get(i), null);
 				if (System.nanoTime() >= deadline) {
 					break;
 				}
@@ -940,7 +950,7 @@ public final class NearAtlas implements AutoCloseable {
 		}
 	}
 
-	private void evict(TextureAtlasSprite sprite) {
+	private void evict(TextureAtlasSprite sprite, Set<Long> releasedPages) {
 		long[] pages = pagesBySprite.remove(sprite);
 		Geometry evicted = resident.remove(sprite);
 		if (compact && evicted != null) {
@@ -965,11 +975,28 @@ public final class NearAtlas implements AutoCloseable {
 			return;
 		}
 		long[] unreferenced = SparsePageRuns.releaseReferences(pageRefs, pages);
-		if (unreferenced.length > 0) {
+		if (unreferenced.length == 0) {
+			return;
+		}
+		if (releasedPages != null) {
+			for (long key : unreferenced) {
+				releasedPages.add(key);
+			}
+		} else {
 			uncommit(albedo, unreferenced);
 			uncommit(normal, unreferenced);
 			uncommit(specular, unreferenced);
 		}
+	}
+
+	private void uncommitReleased(Set<Long> releasedPages) {
+		if (releasedPages.isEmpty()) {
+			return;
+		}
+		long[] pages = releasedPages.stream().mapToLong(Long::longValue).toArray();
+		uncommit(albedo, pages);
+		uncommit(normal, pages);
+		uncommit(specular, pages);
 	}
 
 	private void uncommit(Layer layer, long[] keys) {
@@ -1204,12 +1231,12 @@ public final class NearAtlas implements AutoCloseable {
 		return blended;
 	}
 
-	List<String> debugLines() {
+	public List<String> debugLines() {
 		long bytes = committedBytes();
 		return List.of(
 			"Near sparse atlas" + (isHybrid() ? " (experimental hybrid)" : "") + ": "
 				+ residentSprites + " sprites resident, " + (jobs.size() + incoming.size() + compactPending.size() + retryIncoming.size())
-				+ " pending, " + evictedSprites + " evicted, " + failedSprites + " failed, " + waitingForSlot.size() + " waiting for a slot",
+				+ " pending, " + evictedSprites + " evicted, " + failedSprites + " failed, " + waitingForSlot.size() + " waiting for a slot, " + overflowCount + " slot overflows",
 			"Near animation: " + activeSprites.size() + " sprites active, " + uploadsPerSecond + " uploads/s, backlog avg "
 				+ String.format(java.util.Locale.ROOT, "%.0f", averageBacklog) + " peak " + displayedPeak,
 			"Near committed VRAM: " + String.format(java.util.Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024.0))
@@ -1426,13 +1453,14 @@ public final class NearAtlas implements AutoCloseable {
 	private void finishJob(Job job) {
 		try {
 			List<List<LevelData>> pbr = job.pbr.get();
+			long[] pageKeys = pageKeys(job.albedo);
 			write(albedo, job.albedo);
 			write(normal, pbr.get(0));
 			write(specular, pbr.get(1));
 			if (compact) {
 				writeRemap(job.geometry, true);
 			}
-			pagesBySprite.put(job.sprite, pageKeys(job.albedo));
+			pagesBySprite.put(job.sprite, pageKeys);
 			for (long key : pagesBySprite.get(job.sprite)) {
 				pageRefs.merge(key, 1, Integer::sum);
 			}
@@ -1476,11 +1504,12 @@ public final class NearAtlas implements AutoCloseable {
 		int[] slot = allocateSlot(slotW, slotH);
 		if (slot == null) {
 			slotsFull = true;
+			overflowCount++;
 			if (!overflowLogged) {
 				overflowLogged = true;
 				AtlasStream.LOGGER.warn(
-					"The compact near atlas ({}x{}) is full; sprites that do not fit stay unresolved until space is freed",
-					width, height
+					"The compact near atlas ({}x{}) is full placing {} (slot {}x{}); {} resident sprites, {} waiting. Further events are counted in the near-atlas stats",
+					width, height, sprite.contents().name(), slotW, slotH, resident.size(), waitingForSlot.size()
 				);
 			}
 			return null;

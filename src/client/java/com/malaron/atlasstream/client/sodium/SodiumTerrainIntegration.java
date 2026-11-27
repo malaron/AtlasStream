@@ -139,8 +139,11 @@ public final class SodiumTerrainIntegration {
 			}
 			return;
 		}
-		boolean irisShaderpack = distancePreview && isIrisShaderPackInUse() && !AtlasRuntimeState.isNearAtlasActive();
-		if (irisShaderpack) {
+		boolean irisFixedTilePass = false;
+		boolean irisLowOnlyPass = distancePreview
+			&& isIrisShaderPackInUse()
+			&& !AtlasRuntimeState.isNearAtlasActive();
+		if (irisLowOnlyPass) {
 			ACTIVE_LOD.set(SectionLod.LOW_RESOLUTION);
 			try {
 				refreshIrisPbrSamplers();
@@ -155,7 +158,7 @@ public final class SodiumTerrainIntegration {
 		// With Iris and the near atlas, translucent terrain is split by distance too so glass and water near the
 		// player use full-resolution textures. Far sections are drawn first to keep back-to-front order.
 		boolean splitTranslucent = translucent && isIrisShaderPackInUse() && AtlasRuntimeState.isNearAtlasActive();
-		if (!distancePreview || (translucent && !splitTranslucent)) {
+		if (!distancePreview || irisFixedTilePass || (translucent && !splitTranslucent)) {
 			boolean restoreFullBatches = distancePreview
 				? translucent
 				: SPLIT_PASSES.remove(terrainRenderPass);
@@ -261,6 +264,31 @@ public final class SodiumTerrainIntegration {
 					: AtlasRuntimeState.nearPlaceholderGlId();
 			};
 			method.invoke(samplerHolder, type, lowRemapId, sampler, new String[] {"u_AtlasStreamLowRemap"});
+			method.invoke(
+				samplerHolder, type,
+				(java.util.function.IntSupplier) AtlasRuntimeState::virtualAlbedoGlId,
+				sampler, new String[] {"u_AtlasStreamVirtualAlbedo"}
+			);
+			method.invoke(
+				samplerHolder, type,
+				(java.util.function.IntSupplier) AtlasRuntimeState::virtualNormalGlId,
+				sampler, new String[] {"u_AtlasStreamVirtualNormal"}
+			);
+			method.invoke(
+				samplerHolder, type,
+				(java.util.function.IntSupplier) AtlasRuntimeState::virtualSpecularGlId,
+				sampler, new String[] {"u_AtlasStreamVirtualSpecular"}
+			);
+			method.invoke(
+				samplerHolder, type,
+				(java.util.function.IntSupplier) AtlasRuntimeState::virtualPageTableGlId,
+				sampler, new String[] {"u_AtlasStreamVirtualPageTable"}
+			);
+			method.invoke(
+				samplerHolder, type,
+				(java.util.function.IntSupplier) AtlasRuntimeState::virtualMetadataGlId,
+				sampler, new String[] {"u_AtlasStreamVirtualMetadata"}
+			);
 		} catch (ReflectiveOperationException | RuntimeException exception) {
 			if (IRIS_PBR_LOOKUP_FAILURE_LOGGED.compareAndSet(false, true)) {
 				AtlasStream.LOGGER.error("Could not register the near remap sampler with Iris", exception);
@@ -413,6 +441,8 @@ public final class SodiumTerrainIntegration {
 		if (!isIrisShaderPackInUse()) {
 			return;
 		}
+		boolean recording = LodPerformanceStats.isRecording();
+		long start = recording ? System.nanoTime() : 0;
 		try {
 			Field activeSamplersField = irisActiveProgramSamplersField;
 			Method updateSamplers = irisProgramSamplersUpdateMethod;
@@ -450,6 +480,10 @@ public final class SodiumTerrainIntegration {
 					"Could not refresh Iris terrain PBR samplers for section LOD selection",
 					exception
 				);
+			}
+		} finally {
+			if (recording) {
+				LodPerformanceStats.recordIrisSamplerRefresh(System.nanoTime() - start);
 			}
 		}
 	}
@@ -597,6 +631,9 @@ public final class SodiumTerrainIntegration {
 				FilteredListsByLod filteredLists = filteredListsByTranslucency.get(translucent);
 				if (filteredLists == null) {
 					boolean recording = LodPerformanceStats.isRecording();
+					if (recording) {
+						LodPerformanceStats.recordFilterCacheMiss();
+					}
 					long filterStart = recording ? System.nanoTime() : 0;
 					filteredLists = createFilteredListsByLod(
 						source,
@@ -611,6 +648,8 @@ public final class SodiumTerrainIntegration {
 							filteredLists.lowSectionCount()
 						);
 					}
+				} else if (LodPerformanceStats.isRecording()) {
+					LodPerformanceStats.recordFilterCacheHit();
 				}
 				return filteredLists.renderLists(selectedLod).iterator();
 			};
@@ -685,6 +724,9 @@ public final class SodiumTerrainIntegration {
 	}
 
 	private static void clearCachedBatches(Object renderLists, Object terrainRenderPass) {
+		boolean recording = LodPerformanceStats.isRecording();
+		long start = recording ? System.nanoTime() : 0;
+		int regionCount = 0;
 		Set<Object> regions = Collections.newSetFromMap(new IdentityHashMap<>());
 		for (boolean translucent : new boolean[] { false, true }) {
 			Object iterator = invoke(
@@ -697,6 +739,7 @@ public final class SodiumTerrainIntegration {
 				Object renderList = invoke(iterator, "next", new Class<?>[0]);
 				Object region = invoke(renderList, "getRegion", new Class<?>[0]);
 				if (regions.add(region)) {
+					regionCount++;
 					invoke(
 						region,
 						"clearCachedBatchFor",
@@ -705,6 +748,9 @@ public final class SodiumTerrainIntegration {
 					);
 				}
 			}
+		}
+		if (recording) {
+			LodPerformanceStats.recordBatchClear(System.nanoTime() - start, regionCount);
 		}
 	}
 

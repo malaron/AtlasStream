@@ -13,6 +13,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CompactFreeSlotsTest {
 	@Test
+	void releasedLargeSlotsStayWholeForLargeSprites() {
+		CompactFreeSlots slots = new CompactFreeSlots();
+		slots.releaseSlot(0, 0, 1088, 1088);
+		assertNull(slots.allocate(288, 288));
+		assertArrayEquals(new int[] {0, 0}, slots.allocate(1088, 1088));
+		assertNull(slots.allocate(1088, 1088));
+	}
+
+	@Test
 	void splitsAndCoalescesLargeSlots() {
 		CompactFreeSlots slots = new CompactFreeSlots();
 		slots.release(0, 0, 1088, 1088);

@@ -4,6 +4,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import com.malaron.atlasstream.AtlasStream;
+import com.malaron.atlasstream.shader.OriginalUvShaderContract;
+import com.malaron.atlasstream.shader.IrisVirtualTileShaderContract;
 import com.malaron.atlasstream.shader.VanillaNearShaderPatcher;
 
 import org.spongepowered.asm.mixin.Mixin;
@@ -106,12 +108,67 @@ vec2 atlasStreamLowRemap(vec2 uv) {
     return (destinationOriginPixels + (sourceTexel - sourceOriginPixels) / factor) / destinationSize;
 }
 """;
+	private static final String DISPLAY_TO_ORIGINAL_SCALE_FUNCTION = """
+vec2 atlasStreamDisplayToOriginalScale(vec2 originalUv) {
+    ivec2 nearSize = textureSize(u_AtlasStreamNearRemap, 0);
+    if (nearSize.x > 1) {
+        int rows = nearSize.y - 1;
+        vec4 header0 = texelFetch(u_AtlasStreamNearRemap, ivec2(0, rows), 0);
+        vec4 header1 = texelFetch(u_AtlasStreamNearRemap, ivec2(1, rows), 0);
+        vec2 compactSize = vec2(
+            floor(header0.r * 255.0 + 0.5) + floor(header0.g * 255.0 + 0.5) * 256.0,
+            floor(header0.b * 255.0 + 0.5) + floor(header0.a * 255.0 + 0.5) * 256.0
+        ) + 1.0;
+        if (textureSize(gtexture, 0) == ivec2(compactSize)) {
+            float cell = floor(header1.r * 255.0 + 0.5);
+            return compactSize / (vec2(nearSize.x, rows) * cell);
+        }
+    }
+    ivec2 lowSize = textureSize(u_AtlasStreamLowRemap, 0);
+    if (lowSize.x > 3) {
+        int headerY = lowSize.y - 1;
+        vec4 destinationHeader = texelFetch(u_AtlasStreamLowRemap, ivec2(0, headerY), 0);
+        vec2 destinationSize = vec2(
+            floor(destinationHeader.r * 255.0 + 0.5)
+                + floor(destinationHeader.g * 255.0 + 0.5) * 256.0 + 1.0,
+            floor(destinationHeader.b * 255.0 + 0.5)
+                + floor(destinationHeader.a * 255.0 + 0.5) * 256.0 + 1.0
+        );
+        if (textureSize(gtexture, 0) == ivec2(destinationSize)) {
+            vec4 sourceHeader = texelFetch(u_AtlasStreamLowRemap, ivec2(1, headerY), 0);
+            vec4 gridHeader = texelFetch(u_AtlasStreamLowRemap, ivec2(2, headerY), 0);
+            vec2 sourceSize = vec2(
+                floor(sourceHeader.r * 255.0 + 0.5)
+                    + floor(sourceHeader.g * 255.0 + 0.5) * 256.0,
+                floor(sourceHeader.b * 255.0 + 0.5)
+                    + floor(sourceHeader.a * 255.0 + 0.5) * 256.0
+            ) + 1.0;
+            float cell = floor(gridHeader.r * 255.0 + 0.5)
+                + floor(gridHeader.g * 255.0 + 0.5) * 256.0;
+            ivec2 coordinate = clamp(
+                ivec2(floor(originalUv * sourceSize / cell)),
+                ivec2(0),
+                ivec2(lowSize.x / 3 - 1, headerY - 1)
+            );
+            vec4 factorEntry = texelFetch(
+                u_AtlasStreamLowRemap, ivec2(coordinate.x * 3 + 2, coordinate.y), 0
+            );
+            int encodedFactor = int(floor(factorEntry.r * 255.0 + 0.5));
+            if (encodedFactor > 0) {
+                return destinationSize * exp2(float(encodedFactor - 1)) / sourceSize;
+            }
+        }
+    }
+    return vec2(1.0);
+}
+""";
 	private static final java.util.regex.Pattern MID_TEXCOORD = java.util.regex.Pattern.compile(
 		"vec2\\(mc_midTexCoord\\.xy\\) \\* ([0-9.]+(?:[eE][-+]?[0-9]+)?f?)"
 	);
 	private static boolean logged;
 	private static boolean midLogged;
 	private static boolean vanillaLogged;
+	private static boolean virtualContractLogged;
 	private static final java.util.regex.Pattern UV0_DECLARATION = java.util.regex.Pattern.compile(
 		"in\\s+vec2\\s+iris_UV0\\s*;"
 	);
@@ -181,6 +238,7 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 			if (patchedSource.equals(source)) {
 				continue;
 			}
+			patchedSource = OriginalUvShaderContract.patchVertex(patchedSource);
 			declaration = UV0_DECLARATION.matcher(patchedSource);
 			declaration.find();
 			String head = patchedSource.substring(0, declaration.end());
@@ -219,12 +277,18 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 			// Translucent terrain stays on the low atlas but shares these programs, so the remap only applies when the
 			// bound diffuse texture is the compact near atlas.
 			String atlasFunctions = (GTEXTURE_DECLARATION.matcher(source).find() ? "" : "uniform sampler2D gtexture;\n")
-				+ REMAP_FUNCTION + LOW_REMAP_FUNCTION + ATLAS_ONLY_FUNCTION;
+				+ "out vec2 atlasStream_OriginalUv;\n"
+				+ "flat out vec2 atlasStream_DisplayToOriginalUvScale;\n"
+				+ REMAP_FUNCTION + LOW_REMAP_FUNCTION + DISPLAY_TO_ORIGINAL_SCALE_FUNCTION + ATLAS_ONLY_FUNCTION;
 			String replaced = source.substring(0, function) + atlasFunctions + source.substring(function);
-			replaced = replaced.replace(
-				TEXCOORD_RETURN,
-				"return atlasStreamTerrainRemap(vec2(a_TexCoord & TEXTURE_MAX_VALUE) / float(TEXTURE_MAX_COORD));"
-			);
+			replaced = OriginalUvShaderContract.patchSodiumVertex(replaced, TEXCOORD_RETURN);
+			if (!replaced.contains("atlasStream_OriginalUv = vec2(")) {
+				AtlasStream.LOGGER.error(
+					"Could not export Sodium original UV; texcoord source remains: {}",
+					shaderSnippet(replaced, TEXCOORD_RETURN)
+				);
+				continue;
+			}
 			// The sprite's mid coordinate is a separate attribute in layout space; packs compare it with the diffuse
 			// UV (for example to clamp to the sprite), so it has to move to the compact atlas as well.
 			int[] midCount = {0};
@@ -245,6 +309,35 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 			entry.setValue(replaced);
 			changed = true;
 		}
+		for (Map.Entry<Object, String> entry : patched.entrySet()) {
+			if (!"FRAGMENT".equals(String.valueOf(entry.getKey()))) {
+				continue;
+			}
+			String original = entry.getValue();
+			String fragment = IrisVirtualTileShaderContract.patchSodiumFinalPbrPomFragment(original);
+			if (!virtualContractLogged && original.contains("sceneAlbedo")) {
+				virtualContractLogged = true;
+				var analysis = IrisVirtualTileShaderContract.analyzeSodiumFragment(original);
+				AtlasStream.LOGGER.info(
+					"Iris virtual shader contract candidate: originalUvIn={}, directSamples={}/{}, "
+						+ "parallaxSamples={}/{}, samplerDeclared={}, helpersBeforeMain={}, "
+						+ "requiredSamplersBeforeHelpers={}",
+					analysis.originalUvInput(),
+					analysis.originalDirectSamples(),
+					analysis.candidateDirectSamples(),
+					analysis.originalParallaxSamples(),
+					analysis.candidateParallaxSamples(),
+					analysis.virtualSamplersDeclared(),
+					analysis.helpersBeforeMain(),
+					analysis.requiredSamplersBeforeHelpers()
+				);
+			}
+			if (!fragment.equals(original)) {
+				entry.setValue(fragment);
+				changed = true;
+			}
+
+		}
 		if (changed) {
 			if (!logged) {
 				logged = true;
@@ -252,5 +345,17 @@ vec2 atlasStreamTerrainRemap(vec2 uv) {
 			}
 			callback.setReturnValue(patched);
 		}
+	}
+
+	private static String shaderSnippet(String source, String marker) {
+		int at = source.indexOf(marker);
+		if (at < 0) {
+			at = source.indexOf("_get_texcoord()");
+		}
+		if (at < 0) {
+			return "<marker absent>";
+		}
+		return source.substring(Math.max(0, at - 160), Math.min(source.length(), at + 320))
+			.replace('\n', ' ');
 	}
 }

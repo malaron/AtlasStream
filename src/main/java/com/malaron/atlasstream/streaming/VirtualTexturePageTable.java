@@ -95,6 +95,7 @@ public final class VirtualTexturePageTable {
 		int green = encodedLayer >>> 8 & 255;
 		int blue = encodedLayer >>> 16 & 255;
 		int alpha = encodedLayer == 0 ? 0 : 255;
+		// Byte values uploaded by NativeImage must place red in the integer's high RGB byte.
 		return (alpha << 24) | (red << 16) | (green << 8) | blue;
 	}
 

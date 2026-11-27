@@ -92,6 +92,13 @@ public final class LodCommands {
 								.executes(context -> reportSpriteAlpha(context.getSource(), StringArgumentType.getString(context, "sprite"))))
 					)
 					.then(
+						literal("tile-proof")
+							.requires(net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource::attended)
+							.then(argument("sprite", StringArgumentType.greedyString())
+								.executes(context -> reportTileProof(
+									context.getSource(), StringArgumentType.getString(context, "sprite"))))
+					)
+					.then(
 						literal("terrain-alpha")
 							.requires(net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource::attended)
 							.executes(context -> startTerrainAlpha(context.getSource()))
@@ -358,6 +365,7 @@ public final class LodCommands {
 			source.sendError(Component.literal("Invalid sprite identifier: " + spriteName));
 			return 0;
 		}
+
 		NearAtlas near = AtlasRuntimeState.activeNearAtlas();
 		if (near == null) {
 			source.sendError(Component.literal("The near atlas is not active."));
@@ -384,6 +392,39 @@ public final class LodCommands {
 		} catch (IOException | IllegalStateException exception) {
 			AtlasStream.LOGGER.error("Could not inspect alpha for sprite {}", id, exception);
 			source.sendError(Component.literal("Could not inspect sprite alpha: " + exception.getMessage()));
+			return 0;
+		}
+	}
+
+	private static int reportTileProof(
+		net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource source,
+		String spriteName
+	) {
+		var id = net.minecraft.resources.Identifier.tryParse(spriteName);
+		var texture = source.getClient().getTextureManager().getTexture(
+			net.minecraft.client.renderer.texture.TextureAtlas.LOCATION_BLOCKS
+		);
+		if (id == null || !(texture instanceof net.minecraft.client.renderer.texture.TextureAtlas atlas)) {
+			source.sendError(Component.literal("Invalid sprite or block atlas unavailable"));
+			return 0;
+		}
+		var sprite = ((com.malaron.atlasstream.client.mixin.TextureAtlasAccessor) atlas)
+			.atlasStream$getSprites().stream()
+			.filter(candidate -> candidate.contents().name().equals(id))
+			.findFirst();
+		if (sprite.isEmpty()) {
+			source.sendError(Component.literal("Sprite not found: " + id));
+			return 0;
+		}
+		try {
+			for (String line : AtlasRuntimeState.virtualTextureTileProof(sprite.get())) {
+				source.sendFeedback(Component.literal(line));
+				AtlasStream.LOGGER.info("Virtual tile proof: {}", line);
+			}
+			return 1;
+		} catch (RuntimeException exception) {
+			AtlasStream.LOGGER.error("Could not prove virtual tile for {}", id, exception);
+			source.sendError(Component.literal("Virtual tile proof failed: " + exception.getMessage()));
 			return 0;
 		}
 	}
@@ -564,6 +605,12 @@ public final class LodCommands {
 		}
 		for (String line : lines) {
 			source.sendFeedback(Component.literal(line));
+		}
+		NearAtlas near = AtlasRuntimeState.activeNearAtlas();
+		if (near != null) {
+			for (String line : near.debugLines()) {
+				source.sendFeedback(Component.literal(line));
+			}
 		}
 	}
 
